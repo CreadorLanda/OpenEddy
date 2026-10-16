@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, test/issue-9-critical-flows]
 
 jobs:
   core:
