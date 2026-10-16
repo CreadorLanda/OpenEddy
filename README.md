@@ -87,7 +87,23 @@ Put it behind HTTPS (the browser only gives the microphone to secure pages). `de
 app/   Tauri 2 + TypeScript — login, profile, call screen, hologram (src/eddy), landing (src/landing)
 core/  Python — assistant.py (persona, nicknames, lines per language), voice.py (desktop mic/STT/TTS),
        eleven.py (ElevenLabs, stdlib), llm.py (Ollama), server.py (desktop core), webapp.py (web server)
+tests/ Python — the core's unit and HTTP tests (stdlib + numpy)
 ```
+
+## Tests
+
+```bash
+make test                                              # both suites
+python3 -m unittest discover -s tests -t .              # core (stdlib + numpy)
+npm test --prefix app                                   # app (vitest)
+npm run build --prefix app                              # tsc --noEmit + vite build
+```
+
+No credentials, no paid services, no live infrastructure. The Puter identity, the ElevenLabs key, the Scribe WebSocket, the microphone and the browser audio are all dublês, and the Python suite points `XDG_DATA_HOME` at a temporary folder so a test run never touches your real data.
+
+What is covered: turn cancellation and stale answers (a reply that arrives after you interrupt is dropped), TTS playback cancellation and the browser-voice fallback, the STT turn lifecycle (token, partials, VAD timeout, cancel, socket failure), the desktop STT fallback to Whisper and the microphone lock, the face's tag-to-expression mapping, the web API (auth, validation, quotas, 429/502/503), the desktop API (session token, SSE turns), and the persona's profile cleaning, shortcuts and per-call reset.
+
+CI runs both suites plus the build on every pull request (`.github/workflows/ci.yml`).
 
 ## Support
 
