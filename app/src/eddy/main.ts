@@ -5,11 +5,12 @@
 
 import "../core/theme.css";
 import "./eddy.css";
-import { Api, Native, subscribe, type NewsItem } from "../core/api";
+import { Native, subscribe, type NewsItem } from "../core/api";
 import { h, externalLinks } from "../core/dom";
 import type { Profile } from "../core/types";
 import { EddyFace, expressionForTag, type Expression, type FaceState } from "./eddy";
 import { Ringer } from "./ring";
+import { B, LINKS } from "./backend";
 import * as Puter from "./puter";
 
 const root = document.getElementById("root")!;
@@ -21,6 +22,20 @@ let voice = "pm_alex";
 let voices: Record<string, string> = { pm_alex: "Alex (masculina)" };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const lang = () => profile?.idioma ?? "pt";
+
+const GITHUB = `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.42c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.33-1.3-1.69-1.3-1.69-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5z"/></svg>`;
+const COFFEE = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M17 8h1a4 4 0 0 1 0 8h-1M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4zM7 2v2M11 2v2M15 2v2"/></svg>`;
+
+/** Links do projeto: só nas telas de entrada, nunca na ligação. */
+function projectLinks() {
+  return h(
+    "nav",
+    { class: "links" },
+    h("a", { href: LINKS.github, html: `${GITHUB}<span>GitHub</span>` }),
+    h("a", { class: "kofi", href: LINKS.kofi, html: `${COFFEE}<span>Apoie no Ko-fi</span>` }),
+  );
+}
 
 const PHONE = `<svg viewBox="0 0 24 24" width="30" height="30" fill="currentColor"><path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1z"/></svg>`;
 const MIC = `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>`;
@@ -140,7 +155,7 @@ function enqueue(res: Promise<Response | null>, text: string) {
 
 function queueSpeech(text: string) {
   const t = voiceText(text);
-  if (caption(t)) enqueue(Api.ttsStream(t, voice).catch(() => null), t);
+  if (caption(t)) enqueue(B.tts(t, voice, lang()).catch(() => null), t);
 }
 
 /** Agenda um bloco logo depois do anterior; resolve quando ele termina. */
@@ -274,10 +289,17 @@ function loginScreen(error = "") {
       "section",
       { class: "screen center login" },
       brand(),
-      h("p", { class: "tagline" }, "O Eddy de Lab Rats no seu computador. Egocêntrico, sarcástico e (às vezes) útil."),
+      h("p", { class: "tagline" }, "Ligue para o Eddy de Lab Rats. Egocêntrico, sarcástico e (às vezes) útil."),
       btn,
       err,
-      h("p", { class: "fine" }, "Sua conta Puter guarda seu perfil. A conversa, a voz e o cérebro do Eddy rodam no seu PC."),
+      h(
+        "p",
+        { class: "fine" },
+        B.web
+          ? "Sua conta Puter guarda seu perfil e move o cérebro do Eddy (Puter AI). Quer tudo rodando no seu PC? O app para Linux está no GitHub."
+          : "Sua conta Puter guarda seu perfil. A conversa, a voz e o cérebro do Eddy rodam no seu PC.",
+      ),
+      projectLinks(),
     ),
   );
 }
@@ -320,7 +342,7 @@ function profileScreen(first: boolean) {
         await Puter.saveProfile(next);
         profile = next;
         voice = voiceSel.value;
-        await Promise.all([Api.profile(next), Api.config({ voice })]);
+        await B.setProfile(next, voice);
         homeScreen();
       } catch (e) {
         err.textContent = (e as Error).message;
@@ -333,7 +355,8 @@ function profileScreen(first: boolean) {
     h("label", {}, "Idade"), idade,
     h("label", {}, "Sexo"), h("div", { class: "segs" }, ...segs),
     h("label", {}, "Idioma do Eddy"), h("div", { class: "segs" }, ...langs),
-    h("label", {}, "Voz do Eddy"), voiceSel,
+    B.web ? null : h("label", {}, "Voz do Eddy"),
+    B.web ? null : voiceSel,
     err,
     h("div", { class: "row" }, first ? null : h("button", { type: "button", class: "ghost", onclick: () => homeScreen() }, "Cancelar"), save),
   );
@@ -376,6 +399,7 @@ function homeScreen(note = "") {
         h("p", { class: "fine" }, "Ligar"),
         note || healthNote ? h("p", { class: "error" }, note || healthNote) : null,
       ),
+      h("footer", { class: "home-foot" }, projectLinks()),
     ),
   );
   callBtn.focus();
@@ -440,16 +464,19 @@ async function startCall() {
   let greeting = "";
   let hello: Promise<Response | null> = Promise.resolve(null);
   try {
-    const r = await Api.callStart();
-    greeting = r.text;
-    voice = r.voice;
+    // na web o navegador pede o microfone agora, durante o toque
+    const [r] = await Promise.all([B.callStart(profile!), B.openMic()]);
+    greeting = r.greeting;
+    if (r.voice) voice = r.voice;
     // o "alô" já começa a chegar enquanto ainda toca
-    hello = Api.ttsStream(voiceText(greeting), voice).catch(() => null);
+    hello = B.tts(voiceText(greeting), voice, lang()).catch(() => null);
     await Promise.all([hello, sleep(Math.max(0, 3300 - (performance.now() - t0)))]);
   } catch (e) {
     ringer!.stop();
     call.active = false;
-    homeScreen("Ninguém atendeu: " + (e as Error).message);
+    B.closeMic();
+    const msg = (e as Error).message;
+    homeScreen(/permission|denied|NotAllowed/i.test(msg) ? "O Eddy precisa do seu microfone para a ligação." : "Ninguém atendeu: " + msg);
     return;
   }
   if (!call.active) return;
@@ -480,7 +507,7 @@ function inCallScreen() {
     call.muted = !call.muted;
     muteBtn.innerHTML = call.muted ? MIC_OFF : MIC;
     muteBtn.classList.toggle("on", call.muted);
-    if (call.muted) void Api.listenCancel();
+    if (call.muted) B.cancelHear();
     else call.unmute?.();
   });
 
@@ -491,7 +518,7 @@ function inCallScreen() {
     if (!text) return;
     input.value = "";
     call.typed = text;
-    void Api.listenCancel(); // solta o microfone; o laço pega o texto digitado
+    B.cancelHear(); // solta o microfone; o laço pega o texto digitado
     call.unmute?.();
   } }, input);
   const keysBtn = h("button", { class: "round", title: "Digitar", html: KEYS });
@@ -533,7 +560,11 @@ async function loop() {
       }
       setFace("listen", "Pode falar…");
       try {
-        text = (await Api.listen(15)).text;
+        text = await B.hear({
+          lang: lang(),
+          onPartial: (t) => call.you && call.face?.state === "listen" && (call.you.textContent = t),
+          onLevel: (l) => call.face && (call.face.level = l),
+        });
       } catch (e) {
         setFace("error", "Microfone: " + (e as Error).message);
         await sleep(2000);
@@ -545,14 +576,14 @@ async function loop() {
         if (call.muted) continue;
         call.silences++;
         if (call.silences === 2 || call.silences === 4) {
-          const { text: line } = await Api.callSilence();
+          const line = await B.silence(profile!, false);
           if (!call.active) break;
           call.says!.textContent = caption(line);
           queueSpeech(line);
           await speechIdle();
         }
         if (call.silences >= 6) {
-          const { text: bye } = await Api.callSilence(true);
+          const bye = await B.silence(profile!, true);
           if (!call.active) break;
           call.says!.textContent = caption(bye);
           queueSpeech(bye);
@@ -574,28 +605,20 @@ async function ask(text: string) {
   let pending = "";
   let full = "";
   try {
-    await Api.turn(text, (ev) => {
+    const out = await B.turn(text, profile!, (tok) => {
       if (!call.active) return;
-      if (ev.type === "token") {
-        const tok = String(ev.token);
-        full += tok;
-        pending += tok;
-        call.says!.textContent = caption(full);
-        const m = pending.match(/^([\s\S]*?[.!?…])(\s+)([\s\S]*)$/);
-        if (m && m[1].length > 12) {
-          queueSpeech(m[1]);
-          pending = m[3];
-        }
-      } else if (ev.type === "done") {
-        if (pending.trim()) queueSpeech(pending);
-        pending = "";
-        const extra = ev as { news?: NewsItem[]; settings?: { voice: string } };
-        if (extra.news) renderNews(extra.news);
-        if (extra.settings) voice = extra.settings.voice;
-      } else if (ev.type === "error") {
-        throw new Error(String(ev.error));
+      full += tok;
+      pending += tok;
+      call.says!.textContent = caption(full);
+      const m = pending.match(/^([\s\S]*?[.!?…])(\s+)([\s\S]*)$/);
+      if (m && m[1].length > 12) {
+        queueSpeech(m[1]);
+        pending = m[3];
       }
     });
+    if (call.active && pending.trim()) queueSpeech(pending);
+    if (out.news) renderNews(out.news);
+    if (out.settings) voice = out.settings.voice;
     await speechIdle();
   } catch (e) {
     setFace("error", "Erro: " + (e as Error).message);
@@ -609,7 +632,8 @@ function hangUp() {
   stopSpeech();
   ringer?.stop();
   ringer?.beep(false);
-  void Api.listenCancel();
+  B.cancelHear();
+  B.closeMic();
   call.unmute?.();
   window.clearInterval(call.timer);
   const dur = call.started ? mmss(Date.now() - call.started) : "";
@@ -654,23 +678,25 @@ async function afterLogin() {
   await ready;
   profile = await Puter.loadProfile();
   if (!profile) return profileScreen(true);
-  await Api.profile(profile);
+  await B.setProfile(profile);
   homeScreen();
 }
 
 async function boot() {
   show(h("section", { class: "screen center" }, brand(), h("p", { class: "muted" }, "Ligando os circuitos…")));
-  void subscribe((ev) => {
-    if (ev.type === "voice.level" && call.face) call.face.level = ev.level;
-    if (ev.type === "voice.partial" && call.you && call.face?.state === "listen") call.you.textContent = ev.text;
-    if (ev.type === "voice.error") setStatus("Voz da ElevenLabs falhou — usando a voz local. (" + ev.error.slice(0, 80) + ")");
-  });
-  ready = Promise.all([Api.meta(), Api.health()])
-    .then(([meta, health]) => {
-      voices = meta.voices;
-      voice = meta.eddy.voice;
-      if (!health.ollama) healthNote = "O Ollama não está rodando — o núcleo está tentando subir o bin/ollama.";
-      else if (!health.model_ready) healthNote = `Modelo ${health.model} não instalado: ./bin/ollama pull ${health.model}`;
+  if (!B.web) {
+    // no PC o microfone e a voz moram no núcleo; os eventos vêm por SSE
+    void subscribe((ev) => {
+      if (ev.type === "voice.level" && call.face) call.face.level = ev.level;
+      if (ev.type === "voice.partial" && call.you && call.face?.state === "listen") call.you.textContent = ev.text;
+      if (ev.type === "voice.error") setStatus("Voz da ElevenLabs falhou — usando a voz local. (" + ev.error.slice(0, 80) + ")");
+    });
+  }
+  ready = B.init()
+    .then((r) => {
+      voices = r.voices;
+      voice = r.voice;
+      healthNote = r.note;
     })
     .catch((e) => {
       healthNote = "Núcleo indisponível: " + (e as Error).message;

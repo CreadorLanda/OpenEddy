@@ -39,6 +39,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.realpath(os.environ.get("EDDY_WEB_ROOT") or os.path.join(HERE, "..", "app", "dist"))
 HOST = os.environ.get("EDDY_WEB_HOST", "127.0.0.1")
 PORT = int(os.environ.get("EDDY_WEB_PORT", "8120"))
+# Domínios que mostram a landing em "/" (os outros abrem o app direto).
+LANDING_HOSTS = {h.strip() for h in os.environ.get("EDDY_LANDING_HOSTS", "openeddy.alexandrelanda.com").split(",") if h.strip()}
 
 # Puter AI: modelo rápido para conversa falada; o cliente cai no padrão do Puter se este falhar.
 CHAT_MODEL = os.environ.get("EDDY_WEB_MODEL", "gemini-3.5-flash-lite")
@@ -179,7 +181,9 @@ class Web(BaseHTTPRequestHandler):
                                "voice_ready": bool(eleven.eleven_key())})
         if path.startswith("/api/"):
             return self._json({"error": "rota inexistente"}, 404)
-        rel = "index.html" if path in ("/", "") else path.lstrip("/")
+        host = (self.headers.get("Host") or "").split(":")[0].lower()
+        home = "landing.html" if host in LANDING_HOSTS else "index.html"
+        rel = home if path in ("/", "") else path.lstrip("/")
         full = os.path.realpath(os.path.join(ROOT, rel))
         if not full.startswith(ROOT + os.sep) or not os.path.isfile(full):
             full = os.path.join(ROOT, "index.html")  # SPA

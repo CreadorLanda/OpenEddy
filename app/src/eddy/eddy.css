@@ -138,3 +138,14 @@ button.big { padding: 12px 26px; font-size: 15px; border-radius: 12px; }
 .news .item img { width: 80px; height: 56px; object-fit: cover; border-radius: 7px; flex: none; }
 .news .item small { display: block; color: var(--accent); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px; }
 .news .item b { font-weight: 500; font-size: 13px; line-height: 1.35; }
+
+/* links do projeto: telas de entrada, nunca na ligação */
+.links { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 6px; }
+.links a {
+  display: inline-flex; align-items: center; gap: 7px; padding: 7px 13px; border-radius: 999px;
+  color: #9fc6d4; border: 1px solid #1d3a48; background: rgba(8, 20, 28, .6); font-size: 13px;
+}
+.links a:hover { color: #dff8ff; border-color: #2f6a82; text-decoration: none; }
+.links a.kofi { color: #ffd2cf; border-color: #5a2b2a; background: rgba(40, 14, 14, .55); }
+.links a.kofi:hover { color: #fff; border-color: #ff5e5b; }
+.home-foot { position: absolute; left: 0; right: 0; bottom: 20px; z-index: 3; }

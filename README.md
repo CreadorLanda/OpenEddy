@@ -1,77 +1,97 @@
+<div align="center">
+
+<img src="app/src-tauri/icons/128x128@2x.png" width="110" alt="Open Eddy">
+
 # Open Eddy
 
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-apoie%20o%20projeto-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/alexandrelanda)
-[![GitHub](https://img.shields.io/badge/GitHub-CreadorLanda%2FOpenEddy-181717?logo=github)](https://github.com/CreadorLanda/OpenEddy)
+**Call Eddy from *Lab Rats*. He answers — sarcastic, dramatic, slightly jealous, and somehow still helpful.**
 
-**Web:** openeddy.alexandrelanda.com (em preparação) · **Linux:** app desktop (abaixo) · **Apoie:** [ko-fi.com/alexandrelanda](https://ko-fi.com/alexandrelanda)
+[**Try it on the web →**](https://eddy.alexandrelanda.com) · [Website](https://openeddy.alexandrelanda.com) · [Run it on Linux](#linux-desktop-app)
 
-> Projeto de fã, sem ligação com a Disney. O Eddy pertence aos seus donos.
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-buy%20Eddy%20a%20coffee-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/alexandrelanda)
+![License: MIT](https://img.shields.io/badge/license-MIT-green)
+![Tauri 2](https://img.shields.io/badge/Tauri-2-FFC131?logo=tauri&logoColor=black)
+![ElevenLabs](https://img.shields.io/badge/voice-ElevenLabs-000)
 
-Ligue para o **Eddy** de Lab Rats: egocêntrico, sarcástico, dramático — e, no fim, útil.
-Holograma desenhado em código, conversa de voz mãos-livres, tudo rodando no seu PC.
+</div>
 
-1. **Entrar com Puter** — a conta [Puter](https://puter.com) guarda seu perfil (`puter.kv`).
-2. **Perfil** — nome, idade, sexo e idioma (português é o padrão; inglês e espanhol também). É assim que o Eddy decide se te chama de “garoto”, “garota”, “tiozão”, “vovó”… (nunca “senhor”).
-3. **Ligar** — toca, o Eddy atende, e a conversa segue sozinha: ele ouve, pensa, fala, ouve de novo. Mudo, teclado e desligar como num telefone. Espaço/Esc ou clique no rosto interrompem a fala.
+---
 
-| Parte | Ferramenta | Modelo |
+## What it is
+
+Open Eddy is a voice AI shaped like a phone call. You sign in, tell Eddy your name, age and gender, and call him. He picks you up with a sarcastic greeting, listens while you talk, and answers out loud — sighing, scoffing and laughing at you — while a hologram of his face (drawn in code, 14 expressions) reacts to every line.
+
+- **Hands-free call** — he listens, thinks, speaks, listens again. Mute, keyboard and hang up like a real phone.
+- **Real voice acting** — ElevenLabs `eleven_v4_turbo` streaming, with audio tags (`[sighs]`, `[laughs]`, `[sarcastic]`…) that are *performed*, not read.
+- **Real-time ears** — ElevenLabs Scribe v2 Realtime: your words appear live, and your turn closes ~0.5 s after you stop.
+- **Knows who he's mocking** — your profile picks his nicknames (“kid”, “champ”, “missy”, “gramps”… in PT: “garoto”, “tiozão”…). Never “sir”.
+- **Faces that stay** — the expression is driven by the same tags as the voice and holds between lines.
+- **Languages** — Portuguese (default in the app), English, Spanish.
+
+## Two ways to run it
+
+| | Web ([eddy.alexandrelanda.com](https://eddy.alexandrelanda.com)) | Linux desktop |
 |---|---|---|
-| Cérebro | Ollama (`bin/ollama`) | Gemma 4 E2B quantizado — `gemma4:e2b-it-qat` (4,3 GB) |
-| Ouvido | **ElevenLabs Scribe v2 Realtime** (WebSocket; fecha a fala ~0,5 s depois que você para, com texto parcial ao vivo) | reserva: faster-whisper `small`, local |
-| Voz | **ElevenLabs `eleven_v4_turbo`**, em streaming (PCM, ~0,8 s até o primeiro som) | **Sergio — Friendly and Encouraging** (pt-BR) |
-| Voz reserva | Kokoro-82M ONNX, local | `pm_alex`, `pm_santa`, `pf_dora` — usada se a ElevenLabs falhar |
-| Conta | Puter.js (`https://js.puter.com/v2/`) | — |
+| Brain | Puter AI, in your browser (your Puter account) | Gemma 4 E2B on Ollama, **local** |
+| Ears | Browser mic → ElevenLabs Scribe (single-use token) | ElevenLabs Scribe, or faster-whisper offline |
+| Voice | ElevenLabs via the server (daily limit per user) | ElevenLabs, or Kokoro offline |
+| Account | Puter (profile in `puter.kv`) | Puter (profile in `puter.kv`) |
 
-**Interpretação:** o Eddy escreve marcações de áudio em inglês — `[sighs]`, `[laughs]`, `[scoffs]`, `[sarcastic]`, `[gasps]`… — que o v4 Turbo interpreta (suspiro, risada) e que também mudam a cara do holograma — 14 expressões (feliz, risada, superior, tédio, irritado, surpreso, bravo, triste, chorando, piscadinha, desconfiado, orgulhoso, maquiavélico, enojado), a partir da galeria da série. A expressão fica entre as falas: ouvir (anéis) e pensar (órbita) não trocam o rosto.
+## Linux desktop app
 
-Atalhos que respondem na hora, sem o modelo (só em português): *notícias*, *clima (em <cidade>)*, *que horas são*, *voz feminina* / *voz masculina*.
-
-## Como roda
-
-```
-app/  (Tauri 2: Rust + TypeScript)             core/  (Python)
-  login Puter · perfil · ligação ─ HTTP/SSE ─▶  server.py     127.0.0.1:<porta livre>, token por sessão
-  src-tauri: sobe/derruba o núcleo,             assistant.py  personalidade, apelidos, “alô”, atalhos
-  popup do puter.com, links → navegador         voice.py      Kokoro · whisper + VAD (cancelável)
-                                                llm.py        Ollama; carrega o modelo enquanto toca
-```
-
-O login do Puter abre um popup do `puter.com`; o app só permite popups desse domínio (qualquer outro link abre no navegador).
-
-## Usar
-
-Pré-requisitos: `.venv/`, `bin/ollama`, `kokoro/` (já nesta pasta), Rust, Node 20+, `libwebkit2gtk-4.1-dev`, `ffmpeg`, PipeWire/Pulse e internet para o login.
+Requirements: Rust, Node 20+, Python 3.11+, `libwebkit2gtk-4.1-dev`, `ffmpeg`, PipeWire/PulseAudio, and [Ollama](https://ollama.com).
 
 ```bash
-./bin/ollama pull gemma4:e2b-it-qat   # só na primeira vez
-cd app
-npm install
-npm run tauri dev
-```
+git clone https://github.com/CreadorLanda/OpenEddy.git && cd OpenEddy
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+ollama pull gemma4:e2b-it-qat            # ~4.3 GB, fits a 16 GB laptop
+# optional offline voice: put kokoro-v1.0.onnx + voices-v1.0.bin in ./kokoro/
 
-| Variável | Padrão | Para quê |
-|---|---|---|
-| `EDDY_MODEL` | `gemma4:e2b-it-qat` | modelo do Ollama |
-| `EDDY_WHISPER` | `small` | modelo do faster-whisper |
-| `EDDY_HOME` | pasta do checkout | onde ficam `core/`, `.venv/`, `bin/`, `kokoro/` |
-| `EDDY_ELEVEN_MODEL` | `eleven_v4_turbo` | outro modelo de voz; o `eleven_flash_v2_5` é mais barato mas lê as marcações em voz alta |
-| `EDDY_STT_SILENCE` | `0.7` | segundos de silêncio para o Scribe fechar a sua fala |
-
-### Chave da ElevenLabs
-
-Fica no cofre do sistema (Secret Service / KWallet), nunca no disco nem no git:
-
-```bash
+# optional: ElevenLabs key in the system keyring (never on disk or in git)
 secret-tool store --label="Open Eddy — ElevenLabs" service open-eddy account elevenlabs
-# cola a chave e Enter; para trocar, rode de novo. ELEVENLABS_API_KEY no ambiente também vale.
+
+cd app && npm install && npm run tauri dev
 ```
 
-Sem chave, o Eddy usa só a voz local (Kokoro).
+Without an ElevenLabs key the app runs fully offline (Whisper + Kokoro). `npm run tauri build` produces `.deb` / AppImage packages.
 
-O Gemma 4 E2B QAT ocupa ~3,9 GB de RAM e gera ~6–7 tokens/s num i5-10210U; a primeira resposta da ligação demora mais porque o modelo carrega enquanto o telefone toca.
+| Variable | Default | |
+|---|---|---|
+| `EDDY_MODEL` | `gemma4:e2b-it-qat` | Ollama model |
+| `EDDY_ELEVEN_MODEL` | `eleven_v4_turbo` | ElevenLabs voice model (flash is cheaper but reads the tags aloud) |
+| `EDDY_STT_SILENCE` | `0.7` | seconds of silence that close your turn |
+| `EDDY_WHISPER` | `small` | offline speech-to-text model |
 
-## Outros
+## Self-hosting the web version
 
-- `src/` — scripts antigos (CLI `friday.py`, PyQt `eddy_gui.py` / `eddy_holo.py`).
-- `arquivo/bots-e-mochis/` — os mini bots, a ilha e a janela Bots de antes. Fora do app.
-- O Eddy é personagem da Disney (Lab Rats): uso pessoal. Para distribuir, crie um personagem próprio.
+`core/webapp.py` is a stdlib-only server (no numpy, no models): it serves `app/dist`, the landing page, and the ElevenLabs proxy. Every `/api` call needs the visitor's Puter token (checked against `api.puter.com/whoami`); voice and mic have daily limits.
+
+```bash
+cd app && npm install && npm run build && cd ..
+ELEVENLABS_API_KEY=... EDDY_WEB_HOST=0.0.0.0 EDDY_WEB_PORT=8120 python3 core/webapp.py
+```
+
+| Variable | Default | |
+|---|---|---|
+| `EDDY_WEB_MODEL` | `gemini-3.5-flash-lite` | Puter AI model (falls back to Puter's default) |
+| `EDDY_LANDING_HOSTS` | `openeddy.alexandrelanda.com` | hosts that get the landing page at `/` |
+| `EDDY_TTS_CHARS_PER_USER` / `EDDY_TTS_CHARS_TOTAL` | `4000` / `60000` | daily voice budget |
+| `EDDY_STT_PER_USER` | `150` | daily mic sessions per user |
+
+Put it behind HTTPS (the browser only gives the microphone to secure pages). `deploy/` has the systemd unit and Caddy block used for alexandrelanda.com.
+
+## How it's built
+
+```
+app/   Tauri 2 + TypeScript — login, profile, call screen, hologram (src/eddy), landing (src/landing)
+core/  Python — assistant.py (persona, nicknames, lines per language), voice.py (desktop mic/STT/TTS),
+       eleven.py (ElevenLabs, stdlib), llm.py (Ollama), server.py (desktop core), webapp.py (web server)
+```
+
+## Support
+
+If Eddy made you laugh (or feel judged), keep his ego — and the voice bill — alive: **[ko-fi.com/alexandrelanda](https://ko-fi.com/alexandrelanda)** ☕
+
+## License & disclaimer
+
+Code under the [MIT License](LICENSE). Open Eddy is an unofficial fan project; Eddy and *Lab Rats* belong to Disney, and this project is not affiliated with or endorsed by Disney.
