@@ -75,7 +75,8 @@ ELEVENLABS_API_KEY=... EDDY_WEB_HOST=0.0.0.0 EDDY_WEB_PORT=8120 python3 core/web
 |---|---|---|
 | `EDDY_WEB_MODEL` | `gemini-3.5-flash-lite` | Puter AI model (falls back to Puter's default) |
 | `EDDY_LANDING_HOSTS` | `openeddy.alexandrelanda.com` | hosts that get the landing page at `/` |
-| `EDDY_TTS_CHARS_PER_USER` / `EDDY_TTS_CHARS_TOTAL` | `4000` / `60000` | daily voice budget |
+| `EDDY_TTS_CHARS_PER_USER` / `EDDY_TTS_CHARS_TOTAL` | `8000` / `60000` | daily voice budget (after that, the browser's own voice takes over) |
+| `EDDY_UNLIMITED_USERS` | — | Puter usernames with no limit (e.g. the server owner) |
 | `EDDY_STT_PER_USER` | `150` | daily mic sessions per user |
 
 Put it behind HTTPS (the browser only gives the microphone to secure pages). `deploy/` has the systemd unit and Caddy block used for alexandrelanda.com.
