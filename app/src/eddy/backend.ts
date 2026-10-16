@@ -111,6 +111,7 @@ const mic = new WebMic();
 let model = "";
 let system = "";
 let history: { role: string; content: string }[] = [];
+let seenSilence: string[] = []; // falas de silêncio já usadas nesta ligação
 
 async function chat(messages: { role: string; content: string }[], onToken: (t: string) => void, withModel: boolean) {
   const stream = await puter().ai.chat(messages, withModel && model ? { model, stream: true } : { stream: true });
@@ -142,6 +143,7 @@ const web: Backend = {
     const r = await post<{ system: string; greeting: string }>("/api/web/start", { profile: p });
     system = r.system;
     history = [{ role: "assistant", content: r.greeting }];
+    seenSilence = [];
     return { greeting: r.greeting, voice: "" };
   },
   tts: (text, _voice, lang) =>
@@ -158,7 +160,9 @@ const web: Backend = {
   },
   cancelHear: () => mic.stopListening(),
   async silence(p, final) {
-    return (await post<{ text: string }>("/api/web/silence", { profile: p, final })).text;
+    const { text } = await post<{ text: string }>("/api/web/silence", { profile: p, final, seen: seenSilence });
+    seenSilence.push(text);
+    return text;
   },
   async turn(text, p, onToken) {
     const routed = await post<{ text: string | null; news?: NewsItem[] }>("/api/web/route", { text, profile: p });

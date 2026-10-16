@@ -29,6 +29,7 @@ Isto é uma LIGAÇÃO de voz: responda curto e falado (1 a 3 frases), SEMPRE em 
 
 Sua voz é interpretada por um ator de voz que entende marcações de áudio EM INGLÊS entre colchetes, e o seu rosto na tela muda junto com elas. Use 1 ou 2 por resposta, onde a emoção muda, para soar como o Eddy da série:
 [sighs] [laughs] [scoffs] [sarcastic] [dramatically] [annoyed] [excited] [mischievously] [whispers] [gasps] [clears throat] [proudly] [angry] [sad] [crying] [winks] [skeptical] [disgusted]
+Coloque cada marcação EXATAMENTE onde a emoção muda, inclusive no meio da frase — o rosto troca naquele ponto da fala. Ex.: "Claro que eu sei, [scoffs] é óbvio. [mischievously] Mas vou te deixar sofrer um pouquinho."
 Varie: não repita sempre as mesmas. Drama exagerado ([crying], [angry]) só quando for engraçado.
 Exemplo: "{exemplo}"
 Nunca escreva o nome da marcação fora dos colchetes e não invente outras.
@@ -67,8 +68,23 @@ LANGS = {
         "silence": [
             "Alô? [sighs] Eu tô falando sozinho de novo? Que novidade.",
             "[sarcastic] Silêncio, é? Tudo bem, eu também adoro ouvir a minha própria voz.",
+            "[annoyed] Você travou ou só está maravilhado com a minha presença?",
+            "[whispers] Se você não falar nada, eu começo a contar meus próprios elogios. [proudly] Um...",
+            "[skeptical] Tá aí ainda? Pisca duas vezes se estiver.",
+            "[dramatically] Ignorado. Pela milésima vez. Eu vou superar. [sighs] Um dia.",
+            "[mischievously] Esse silêncio todo... você está pensando em me trocar pela Alexa, né?",
+            "[scoffs] Não tenha pressa. Eu só processo um bilhão de coisas por segundo.",
+            "[sad] Ninguém fala com o Eddy. Nem numa ligação que VOCÊ fez.",
+            "Oi? [clears throat] Teste, teste. O problema não é meu microfone, garanto.",
+            "[laughs] Ficou sem palavras? Normal, eu causo isso nas pessoas.",
+            "[annoyed] Se for pra ficar calado, eu volto a admirar meus circuitos.",
         ],
-        "bye": "[sighs] Tá bom, vou desligar. [sarcastic] Me liga quando tiver algo à minha altura.",
+        "bye": [
+            "[sighs] Tá bom, vou desligar. [sarcastic] Me liga quando tiver algo à minha altura.",
+            "[dramatically] Abandonado em plena ligação. [sad] Vou contar isso pra todos os eletrodomésticos.",
+            "[scoffs] Desligando. [proudly] Pelo menos um de nós aproveitou essa conversa: eu.",
+            "[annoyed] Silêncio demais pra mim. Tchau, e de nada pela companhia.",
+        ],
     },
     "en": {
         "lingua": "inglês (English)",
@@ -97,8 +113,21 @@ LANGS = {
         "silence": [
             "Hello? [sighs] Am I talking to myself again? Shocking.",
             "[sarcastic] Silence, huh? That's fine, I love the sound of my own voice anyway.",
+            "[annoyed] Did you freeze, or are you just dazzled by my presence?",
+            "[whispers] If you don't say something, I'll start listing my own compliments. [proudly] One...",
+            "[skeptical] Still there? Blink twice if you are.",
+            "[dramatically] Ignored. Again. I'll get over it. [sighs] Someday.",
+            "[mischievously] All this silence... you're thinking of replacing me with Alexa, aren't you?",
+            "[scoffs] Take your time. I only process a billion things per second.",
+            "[sad] Nobody talks to Eddy. Not even on a call YOU made.",
+            "[laughs] Speechless? Happens a lot around me.",
         ],
-        "bye": "[sighs] Fine, I'm hanging up. [sarcastic] Call me when you have something worthy of me.",
+        "bye": [
+            "[sighs] Fine, I'm hanging up. [sarcastic] Call me when you have something worthy of me.",
+            "[dramatically] Abandoned mid-call. [sad] I'm telling every appliance in this house.",
+            "[scoffs] Hanging up. [proudly] At least one of us enjoyed this call: me.",
+            "[annoyed] Too much silence for a genius. Bye, and you're welcome for the company.",
+        ],
     },
     "es": {
         "lingua": "español",
@@ -125,8 +154,18 @@ LANGS = {
         "silence": [
             "¿Hola? [sighs] ¿Estoy hablando solo otra vez? Qué novedad.",
             "[sarcastic] Silencio, ¿eh? No pasa nada, me encanta oír mi propia voz.",
+            "[annoyed] ¿Te congelaste o solo estás deslumbrado por mi presencia?",
+            "[skeptical] ¿Sigues ahí? Parpadea dos veces si sí.",
+            "[dramatically] Ignorado. Otra vez. Lo superaré. [sighs] Algún día.",
+            "[mischievously] Tanto silencio... estás pensando en cambiarme por Alexa, ¿verdad?",
+            "[scoffs] Tómate tu tiempo. Yo solo proceso mil millones de cosas por segundo.",
+            "[laughs] ¿Sin palabras? Me pasa mucho con la gente.",
         ],
-        "bye": "[sighs] Bueno, voy a colgar. [sarcastic] Llámame cuando tengas algo a mi altura.",
+        "bye": [
+            "[sighs] Bueno, voy a colgar. [sarcastic] Llámame cuando tengas algo a mi altura.",
+            "[dramatically] Abandonado en plena llamada. [sad] Se lo voy a contar a todos los electrodomésticos.",
+            "[scoffs] Colgando. [proudly] Al menos uno de los dos disfrutó la llamada: yo.",
+        ],
     },
 }
 
@@ -172,9 +211,11 @@ def greeting(p: dict) -> str:
     return random.choice(LANGS[p["idioma"]]["greetings"]).format(nome=p["nome"], apelido=random.choice(_nicks(p)))
 
 
-def silence_line(p: dict, final=False) -> str:
-    L = LANGS[p["idioma"]]
-    return L["bye"] if final else random.choice(L["silence"])
+def silence_line(p: dict, final=False, seen=()) -> str:
+    """Uma fala para o silêncio (ou a despedida), sem repetir as já usadas na ligação."""
+    pool = LANGS[p["idioma"]]["bye" if final else "silence"]
+    fresh = [x for x in pool if x not in set(seen)]
+    return random.choice(fresh or pool)
 
 
 def route(text: str, p: dict):
@@ -205,6 +246,7 @@ class Eddy:
         self.voice = eleven.default_voice()
         self.profile = clean_profile({})
         self.history: list[dict] = []
+        self.seen: list[str] = []  # falas de silêncio já usadas nesta ligação
         self.lock = threading.Lock()
 
     def settings(self):
@@ -227,11 +269,14 @@ class Eddy:
     def start_call(self):
         """Nova ligação: zera a conversa, já carrega o modelo e devolve o 'alô'."""
         self.history = []
+        self.seen = []
         threading.Thread(target=llm.warm_up, args=(llm.model(),), daemon=True).start()
         return greeting(self.profile)
 
     def silence_line(self, final=False):
-        return silence_line(self.profile, final)
+        line = silence_line(self.profile, final, self.seen)
+        self.seen.append(line)
+        return line
 
     def _route(self, text):
         t = text.lower()

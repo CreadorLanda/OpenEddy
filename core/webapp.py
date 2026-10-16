@@ -239,7 +239,8 @@ def r_route(h, user, body):
 
 
 def r_silence(h, user, body):
-    return {"text": assistant.silence_line(_profile(body), bool(body.get("final")))}
+    seen = [str(x) for x in (body.get("seen") or [])][:40]
+    return {"text": assistant.silence_line(_profile(body), bool(body.get("final")), seen)}
 
 
 def r_tts(h, user, body):

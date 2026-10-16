@@ -144,12 +144,20 @@ function voiceText(text: string) {
     .trim();
 }
 
-/** A primeira marcação da frase ([sarcastic], [gasps]…) decide a cara do Eddy. */
+/**
+ * A cara de um pedaço da fala: a marcação dele manda; sem marcação, o próprio
+ * texto dá a reação (risada, pergunta, exclamação). Sem pista, mantém a atual.
+ */
 function exprOf(text: string): Expression | null {
   for (const m of text.matchAll(/\[([^\]]{1,30})\]/g)) {
     const e = expressionForTag(m[1]);
     if (e) return e;
   }
+  const t = caption(text).toLowerCase();
+  if (/\b(ha){2,}|\b(he){2,}|kkk|rsrs|haha|jaja/.test(t)) return "laughing";
+  if (/\?\s*$/.test(t)) return "skeptical";
+  if (/!\s*$/.test(t) && t.length < 90) return "surprised";
+  if (/\b(óbvio|obvio|claro que|genial|gênio|perfeito|obviously|of course|brilliant)\b/.test(t)) return "proud";
   return null;
 }
 
@@ -158,9 +166,27 @@ function enqueue(res: Promise<Response | null>, text: string) {
   if (!running) void drain();
 }
 
+/**
+ * Corta a fala onde há marcação ([sarcastic], [gasps]…), inclusive no meio da
+ * frase: cada pedaço vira um pedido de voz próprio, e o rosto troca no instante
+ * em que aquele pedaço começa a tocar. A marcação fica no começo do pedaço.
+ */
+function splitAtTags(text: string): string[] {
+  const parts = text.split(/(?=\[[^\]]{1,30}\])/);
+  const out: string[] = [];
+  for (const part of parts) {
+    // pedaço curto demais (só a marcação, ou uma palavra) gruda no próximo/anterior
+    if (out.length && caption(out[out.length - 1]).length < 8) out[out.length - 1] += part;
+    else out.push(part);
+  }
+  if (out.length > 1 && caption(out[out.length - 1]).length < 8) out[out.length - 2] += out.pop();
+  return out.map((p) => p.trim()).filter(Boolean);
+}
+
 function queueSpeech(text: string) {
-  const t = voiceText(text);
-  if (caption(t)) enqueue(serverVoiceOff ? Promise.resolve(null) : B.tts(t, voice, lang()).catch(() => null), t);
+  for (const t of splitAtTags(voiceText(text))) {
+    if (caption(t)) enqueue(serverVoiceOff ? Promise.resolve(null) : B.tts(t, voice, lang()).catch(() => null), t);
+  }
 }
 
 /** Agenda um bloco logo depois do anterior; resolve quando ele termina. */
@@ -502,15 +528,15 @@ async function startCall() {
   const t0 = performance.now();
 
   let greeting = "";
-  let hello: Promise<Response | null> = Promise.resolve(null);
+  let hello: { res: Promise<Response | null>; text: string }[] = [];
   try {
     // na web o navegador pede o microfone agora, durante o toque
     const [r] = await Promise.all([B.callStart(profile!), B.openMic()]);
     greeting = r.greeting;
     if (r.voice) voice = r.voice;
-    // o "alô" já começa a chegar enquanto ainda toca
-    hello = B.tts(voiceText(greeting), voice, lang()).catch(() => null);
-    await Promise.all([hello, sleep(Math.max(0, 3300 - (performance.now() - t0)))]);
+    // o "alô" (cortado nas marcações) já começa a chegar enquanto ainda toca
+    hello = splitAtTags(voiceText(greeting)).map((text) => ({ text, res: B.tts(text, voice, lang()).catch(() => null) }));
+    await Promise.all([hello[0]?.res, sleep(Math.max(0, 3300 - (performance.now() - t0)))]);
   } catch (e) {
     ringer!.stop();
     call.active = false;
@@ -525,7 +551,7 @@ async function startCall() {
 
   inCallScreen();
   call.says!.textContent = caption(greeting);
-  enqueue(hello, greeting);
+  for (const piece of hello) enqueue(piece.res, piece.text);
   await speechIdle();
   void loop();
 }
