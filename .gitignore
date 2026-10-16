@@ -1,0 +1,17 @@
+# Ambiente e binários pesados (baixados localmente, nunca no git)
+.venv/
+bin/
+lib/
+kokoro/
+voices/
+samples/
+.thumb-cache/
+__pycache__/
+*.log
+*.wav
+arquivo/
+src/
+node_modules/
+app/dist/
+app/src-tauri/target/
+app/src-tauri/gen/

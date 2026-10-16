@@ -1,0 +1,5 @@
+faster-whisper
+piper-tts
+kokoro-onnx
+PyQt6
+websockets

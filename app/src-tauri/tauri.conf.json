@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Open Eddy",
+  "version": "0.1.0",
+  "identifier": "dev.creadorlanda.openeddy",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1430",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' https://js.puter.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob:; frame-src https://*.puter.com https://puter.com; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* https://*.puter.com https://puter.com wss://*.puter.com",
+      "devCsp": "default-src 'self'; script-src 'self' https://js.puter.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob:; frame-src https://*.puter.com https://puter.com; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* https://*.puter.com https://puter.com wss://*.puter.com ws://127.0.0.1:1430"
+    },
+    "windows": []
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "deb",
+      "appimage"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png"
+    ],
+    "category": "Utility",
+    "shortDescription": "Open Eddy — ligue para o Eddy de Lab Rats",
+    "longDescription": "Open Eddy: o Eddy de Lab Rats no seu computador, por ligação de voz. Login com Puter; cérebro (Gemma 4), ouvido (Whisper) e voz (Kokoro) rodam localmente."
+  }
+}

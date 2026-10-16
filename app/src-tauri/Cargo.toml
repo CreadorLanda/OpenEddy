@@ -1,0 +1,24 @@
+[package]
+name = "open-eddy"
+description = "Open Eddy — ligue para o Eddy de Lab Rats"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "open_eddy_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
