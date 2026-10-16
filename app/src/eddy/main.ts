@@ -97,7 +97,11 @@ let analyser: AnalyserNode | null = null;
 let ringer: Ringer | null = null;
 const active = new Set<AudioBufferSourceNode>();
 let nextAt = 0;
-let queue: { res: Promise<Response | null>; expr: Expression | null }[] = [];
+let queue: { res: Promise<Response | null>; expr: Expression | null; text: string }[] = [];
+// voz de reserva: a do navegador, quando o servidor recusa (limite do dia, sem rede)
+let serverVoiceOff = false;
+let localAmp = 0;
+let localSpeaking = false;
 let running = false;
 let token = 0;
 let idleWaiters: (() => void)[] = [];
@@ -116,6 +120,7 @@ function ensureAudio() {
 }
 
 function speechAmp() {
+  if (localSpeaking) return localAmp;
   if (!analyser || !active.size) return 0;
   analyser.getFloatTimeDomainData(ampBuf);
   let sum = 0;
@@ -149,13 +154,13 @@ function exprOf(text: string): Expression | null {
 }
 
 function enqueue(res: Promise<Response | null>, text: string) {
-  queue.push({ res, expr: exprOf(text) });
+  queue.push({ res, expr: exprOf(text), text });
   if (!running) void drain();
 }
 
 function queueSpeech(text: string) {
   const t = voiceText(text);
-  if (caption(t)) enqueue(B.tts(t, voice, lang()).catch(() => null), t);
+  if (caption(t)) enqueue(serverVoiceOff ? Promise.resolve(null) : B.tts(t, voice, lang()).catch(() => null), t);
 }
 
 /** Agenda um bloco logo depois do anterior; resolve quando ele termina. */
@@ -221,20 +226,54 @@ async function drain() {
   while (queue.length && my === token) {
     const item = queue.shift()!;
     const res = await item.res;
-    if (!res || !res.ok || my !== token) continue;
+    if (my !== token) continue;
     if (call.face) {
       call.face.state = "speak";
       if (item.expr) call.face.expression = item.expr;
     }
-    setStatus("Eddy falando… (Espaço interrompe)");
     try {
-      await play(res, my);
+      if (res && res.ok) {
+        setStatus("Eddy falando… (Espaço interrompe)");
+        await play(res, my);
+      } else {
+        if (res) {
+          const why = ((await res.json().catch(() => ({}))) as { error?: string }).error ?? res.statusText;
+          if (res.status === 429) serverVoiceOff = true; // não adianta insistir hoje
+          setStatus(`${why} — usando a voz do navegador.`);
+        }
+        await speakLocal(caption(item.text), my);
+      }
     } catch {
       /* uma frase perdida não derruba a ligação */
     }
   }
   if (my === token) running = false;
   if (!running) for (const w of idleWaiters.splice(0)) w();
+}
+
+/** Voz do próprio navegador (Web Speech): grátis e local, mas sem o Sergio. */
+function speakLocal(text: string, my: number): Promise<void> {
+  const synth = window.speechSynthesis;
+  if (!synth || !text || my !== token) return Promise.resolve();
+  return new Promise((resolve) => {
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = { pt: "pt-BR", en: "en-US", es: "es-ES" }[lang()];
+    const v = synth.getVoices().find((x) => x.lang.toLowerCase().startsWith(u.lang.slice(0, 2).toLowerCase()));
+    if (v) u.voice = v;
+    u.rate = 1.05;
+    u.pitch = 0.85;
+    const mouth = window.setInterval(() => (localAmp = 0.25 + Math.random() * 0.55), 90);
+    const end = () => {
+      window.clearInterval(mouth);
+      localAmp = 0;
+      localSpeaking = false;
+      resolve();
+    };
+    u.onend = end;
+    u.onerror = end;
+    localSpeaking = true;
+    synth.speak(u);
+  });
 }
 
 /** Resolve quando o Eddy termina de falar tudo o que está na fila. */
@@ -255,6 +294,7 @@ function stopSpeech() {
   }
   active.clear();
   nextAt = 0;
+  if (localSpeaking) window.speechSynthesis?.cancel();
   running = false;
   for (const w of idleWaiters.splice(0)) w();
 }

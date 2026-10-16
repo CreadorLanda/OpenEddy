@@ -46,9 +46,11 @@ LANDING_HOSTS = {h.strip() for h in os.environ.get("EDDY_LANDING_HOSTS", "opened
 CHAT_MODEL = os.environ.get("EDDY_WEB_MODEL", "gemini-3.5-flash-lite")
 
 # Limites diários (a ElevenLabs é paga com a chave do dono do servidor).
-TTS_CHARS_USER = int(os.environ.get("EDDY_TTS_CHARS_PER_USER", "4000"))
+TTS_CHARS_USER = int(os.environ.get("EDDY_TTS_CHARS_PER_USER", "8000"))
 TTS_CHARS_ALL = int(os.environ.get("EDDY_TTS_CHARS_TOTAL", "60000"))
 STT_SESSIONS_USER = int(os.environ.get("EDDY_STT_PER_USER", "150"))
+# Usuários Puter sem limite (o dono do servidor), separados por vírgula.
+UNLIMITED = {u.strip() for u in os.environ.get("EDDY_UNLIMITED_USERS", "").split(",") if u.strip()}
 
 LINKS = {
     "github": "https://github.com/CreadorLanda/OpenEddy",
@@ -108,6 +110,8 @@ class Usage:
 
     def take(self, user: str, tts_chars=0, stt=0) -> str | None:
         """Reserva o uso; devolve o motivo se passar do limite."""
+        if user in UNLIMITED:
+            return None
         with self.lock:
             d = self._today()
             u = d["users"].setdefault(user, {"tts": 0, "stt": 0})
