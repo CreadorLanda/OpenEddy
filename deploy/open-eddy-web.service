@@ -1,0 +1,27 @@
+# /etc/systemd/system/open-eddy-web.service
+[Unit]
+Description=Open Eddy (web)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+User=openeddy
+Group=openeddy
+WorkingDirectory=/opt/open-eddy
+# ELEVENLABS_API_KEY e o resto ficam aqui (root:openeddy, 640) — nunca no git
+EnvironmentFile=/etc/open-eddy/env
+Environment=XDG_DATA_HOME=/var/lib/open-eddy
+Environment=EDDY_WEB_ROOT=/opt/open-eddy/app/dist
+ExecStart=/usr/bin/python3 -I /opt/open-eddy/core/webapp.py
+Restart=on-failure
+RestartSec=3
+# endurecimento: só lê o código e escreve no próprio diretório de dados
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/open-eddy
+StateDirectory=open-eddy
+
+[Install]
+WantedBy=multi-user.target

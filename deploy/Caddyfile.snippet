@@ -1,0 +1,21 @@
+# Acrescentar ao Caddyfile do proxy que já atende a porta 443.
+# A landing e o app saem do mesmo processo; o Host decide a página inicial.
+openeddy.alexandrelanda.com, eddy.alexandrelanda.com {
+	encode gzip zstd
+	reverse_proxy 172.17.0.1:8120 {
+		# a voz chega em streaming: não segurar os bytes
+		flush_interval -1
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "microphone=(self), camera=(), geolocation=()"
+		-Server
+	}
+	tls {
+		issuer acme {
+			disable_http_challenge
+		}
+	}
+}
