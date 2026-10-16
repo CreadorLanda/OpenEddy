@@ -1,0 +1,81 @@
+/* Tokens compartilhados pela janela do Open Eddy. */
+:root {
+  --bg: #0c0d10;
+  --panel: #131419;
+  --panel-2: #191b21;
+  --line: #24262e;
+  --line-2: #2f323c;
+  --text: #e9eaef;
+  --muted: #8b90a0;
+  --faint: #5d6170;
+  --accent: #6ee4ff;
+  --accent-ink: #062330;
+  --warn: #f5a524;
+  --ok: #34d399;
+  --bad: #f4505e;
+  --radius: 12px;
+  --font: "Inter", system-ui, "Noto Sans", "Ubuntu", sans-serif;
+  --mono: "JetBrains Mono", "Fira Code", ui-monospace, "DejaVu Sans Mono", monospace;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 var(--font);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: var(--panel-2);
+  border: 1px solid var(--line-2);
+  border-radius: 9px;
+  padding: 7px 12px;
+  cursor: pointer;
+  transition: border-color .15s, background .15s, opacity .15s;
+}
+button:hover { border-color: #444857; background: #1e2028; }
+button:disabled { opacity: .45; cursor: default; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
+button.primary:hover { background: #8beaff; }
+button.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+button.ghost:hover { color: var(--text); background: var(--panel-2); }
+button.danger { color: var(--bad); }
+button.icon { padding: 6px 8px; line-height: 0; }
+
+input, textarea, select {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line-2);
+  border-radius: 9px;
+  padding: 8px 10px;
+  outline: none;
+  width: 100%;
+}
+input:focus, textarea:focus, select:focus { border-color: #4b8fa3; box-shadow: 0 0 0 3px rgba(110, 228, 255, .12); }
+textarea { resize: vertical; }
+label { display: block; font-size: 12px; color: var(--muted); margin: 14px 0 6px; font-weight: 500; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #2a2d36; border-radius: 10px; border: 3px solid transparent; background-clip: content-box; }
+
+.mochi { position: relative; display: inline-block; flex: none; }
+.mochi canvas { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+
+code { font-family: var(--mono); font-size: 12.5px; background: #1d2027; border: 1px solid var(--line); padding: 1px 5px; border-radius: 5px; }
+pre { background: #101116; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; overflow: auto; font: 12.5px/1.5 var(--mono); }
+pre code { background: none; border: 0; padding: 0; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+  background: #2a1218; color: #ffd5da; border: 1px solid #5c2430;
+  padding: 10px 16px; border-radius: 10px; z-index: 99; max-width: 80vw;
+}

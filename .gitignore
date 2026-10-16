@@ -9,8 +9,8 @@ samples/
 __pycache__/
 *.log
 *.wav
-arquivo/
-src/
+/arquivo/
+/src/
 node_modules/
 app/dist/
 app/src-tauri/target/
