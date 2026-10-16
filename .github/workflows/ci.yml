@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main, test/issue-9-critical-flows]
+    branches: [main]
 
 jobs:
   core:
@@ -40,4 +40,3 @@ jobs:
       - run: npm test
       # tsc --noEmit + build: catches what the tests do not (types and bundling)
       - run: npm run build
-# Comment: run `python -m unittest discover -s tests -t .` locally before pushing.
