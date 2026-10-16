@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="app/src-tauri/icons/128x128@2x.png" width="110" alt="Open Eddy">
-
 # Open Eddy
+
+<img src="docs/eddy.gif" width="320" alt="Eddy's hologram switching expressions while he talks">
 
 **Call Eddy from *Lab Rats*. He answers — sarcastic, dramatic, slightly jealous, and somehow still helpful.**
 
@@ -95,3 +95,17 @@ If Eddy made you laugh (or feel judged), keep his ego — and the voice bill —
 ## License & disclaimer
 
 Code under the [MIT License](LICENSE). Open Eddy is an unofficial fan project; Eddy and *Lab Rats* belong to Disney, and this project is not affiliated with or endorsed by Disney.
+
+## Star history
+
+If Eddy made you smile, a ⭐ makes his ego even bigger.
+
+[![Star History Chart](https://api.star-history.com/svg?repos=CreadorLanda/OpenEddy&type=Date)](https://star-history.com/#CreadorLanda/OpenEddy&Date)
+
+---
+
+<div align="center">
+
+Made with ☕ by **[Alexandre Landa](https://github.com/CreadorLanda)** · [Ko-fi](https://ko-fi.com/alexandrelanda) · [GitHub](https://github.com/CreadorLanda/OpenEddy)
+
+</div>
