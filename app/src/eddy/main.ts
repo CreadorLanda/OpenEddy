@@ -768,6 +768,7 @@ function makeGame(idea: string) {
     make: (i, onToken, fix) => B.makeGame(i, profile!, onToken, fix),
     host: (html) => B.hostGame(html),
     theme: faceTheme,
+    lang,
     slow: !B.web,
   });
 }

@@ -137,8 +137,8 @@ class MakeTest(unittest.TestCase):
         import maker
         m = maker.messages("pegar torradas", "en")
         self.assertIn("English", m[0]["content"])
-        self.assertIn("var(--ink)", m[0]["content"])
-        self.assertIn("eddyGame: 'over'", m[0]["content"])
+        self.assertIn("Kit.game", m[0]["content"])
+        self.assertIn("Kit.over()", m[0]["content"])
         self.assertIn("pegar torradas", m[1]["content"])
         fixed = maker.messages("x", "pt", {"code": "<html>…</html>", "error": "foo is not defined"})
         self.assertEqual([x["role"] for x in fixed], ["system", "user", "assistant", "user"])

@@ -12,12 +12,15 @@
 
 import { h } from "../../core/dom";
 import type { GameHost, GameSession } from "./common";
+import { kitPage } from "./kit";
 
 export interface MakerDeps {
   make(idea: string, onToken: (t: string) => void, fix?: { code: string; error: string }): Promise<string>;
   /** endereço do jogo (PC) ou null (web: srcdoc) */
   host(html: string): Promise<string | null>;
   theme(): "holo" | "classic";
+  /** língua dos textos do Kit (início, fim de jogo) */
+  lang(): string;
   /** modelo local na CPU: avisa que demora */
   slow: boolean;
 }
@@ -32,6 +35,19 @@ const REPORT =
   "<script>(function(){var s=function(m){try{parent.postMessage({eddyGame:'error',message:String(m).slice(0,400)},'*')}catch(e){}};" +
   "addEventListener('error',function(e){s((e.message||'erro')+(e.lineno?' (linha '+e.lineno+')':''))});" +
   "addEventListener('unhandledrejection',function(e){s(e.reason)})})()</script>";
+
+/**
+ * O jogo de dentro da resposta do modelo. O normal são as regras para o Kit
+ * (bloco ```js com Kit.game); um HTML inteiro também vale (alguns modelos
+ * insistem). Devolve a página pronta para rodar, ou null.
+ */
+export function extractGame(text: string, lang: string): { page: string; source: string } | null {
+  const js = /```(?:js|javascript)\s*\n([\s\S]*?)```/i.exec(text)?.[1] ?? /```\s*\n([\s\S]*?Kit\.game[\s\S]*?)```/.exec(text)?.[1];
+  if (js && /Kit\.game\s*\(/.test(js)) return { page: kitPage(js.trim(), lang), source: js.trim() };
+  if (!/```/.test(text) && /Kit\.game\s*\(/.test(text) && !/<html/i.test(text)) return { page: kitPage(text.trim(), lang), source: text.trim() };
+  const html = extractHtml(text);
+  return html ? { page: html, source: html } : null;
+}
 
 /** O HTML de dentro da resposta do modelo (bloco ```html, ou do <!doctype ao </html>). */
 export function extractHtml(text: string): string | null {
@@ -49,7 +65,8 @@ export function extractHtml(text: string): string | null {
 export function prepareHtml(html: string, theme: "holo" | "classic"): string {
   const inject =
     `<meta http-equiv="Content-Security-Policy" content="${CSP}">` +
-    `<style>:root{${PALETTE[theme]}}html,body{background:var(--bg);color:var(--ink)}</style>` +
+    // :root:root e !important: ganha de um :root que o próprio jogo declare depois
+    `<style>:root:root{${PALETTE[theme].replace(/;/g, " !important;")} !important}html,body{background:var(--bg);color:var(--ink)}</style>` +
     REPORT;
   if (/<head[^>]*>/i.test(html)) return html.replace(/<head[^>]*>/i, (m) => m + inject);
   if (/<html[^>]*>/i.test(html)) return html.replace(/<html[^>]*>/i, (m) => `${m}<head>${inject}</head>`);
@@ -64,6 +81,7 @@ export class MadeGame implements GameSession {
   private save: HTMLButtonElement;
   private frame: HTMLIFrameElement | null = null;
   private html = "";
+  private source = "";
   private ready = "";
   private closed = false;
   private repaired = false;
@@ -139,9 +157,10 @@ export class MadeGame implements GameSession {
       return;
     }
     if (this.closed || gen !== this.gen) return;
-    const html = extractHtml(text);
-    if (!html) return this.fail("o modelo não devolveu um jogo");
-    this.html = html;
+    const game = extractGame(text, this.deps.lang());
+    if (!game) return this.fail("o modelo não devolveu um jogo");
+    this.html = game.page;
+    this.source = game.source;
     await this.play();
     if (!this.closed) this.host.comment("m_ready", true);
   }
@@ -182,7 +201,7 @@ export class MadeGame implements GameSession {
       if (!this.repaired && performance.now() - this.playingSince < 8000) {
         this.repaired = true;
         this.host.comment("m_bug", true);
-        void this.build({ code: this.html, error: String(data.message ?? "erro") });
+        void this.build({ code: this.source, error: String(data.message ?? "erro") });
       }
     } else if (data?.eddyGame === "over") {
       const now = performance.now();
