@@ -17,8 +17,8 @@ import time
 # chega a existir, não um aviso. Ver `RateLimit.pega`.
 DESCARTE_SEG = 300.0
 MAX_CHAVES = 1000
-# O que se-promete a quem chega com a mesa cheia: o tempo que uma chave parada
-# demora a ser descartada, que é quando a mesa volta a ter lugar.
+# O tecto do que se diz a quem chega com a mesa cheia: o tempo que uma chave
+# parada demora a ser descartada. Ver `pega` — é um tecto, não uma garantia.
 CHEIA_ESPERA = DESCARTE_SEG
 
 
@@ -47,11 +47,17 @@ class RateLimit:
                     # perde o seu, e a mesa nunca passa de `MAX_CHAVES`.
                     #
                     # A espera que se devolve não é zero: com a mesa cheia não há
-                    # ficha nenhuma a encher, e o que falta é espaço. A primeira
-                    # vez que há espaço é quando a chave mais antiga fica
-                    # `DESCARTE_SEG` sem ninguém tocar nela. Se as chaves que lá
-                    # estão se continuarem a usar, esse momento não chega e o
-                    # tecto é o melhor que se pode dizer — nunca um "já tens".
+                    # ficha nenhuma a encher, e o que falta é espaço. Calcula-se
+                    # com a mesa como ela está agora — a chave mais antiga fica
+                    # `DESCARTE_SEG` sem ninguém tocar nela — e por isso é uma
+                    # estimativa, não uma promessa: se alguém voltar a usar uma
+                    # dessas chaves entretanto, o relógio dela recomeça e o espaço
+                    # aparece mais tarde do que o que se disse. Fica sempre com o
+                    # tecto `CHEIA_ESPERA` para não subestimar.
+                    #
+                    # E se as chaves que lá estão se continuarem a usar, o espaço
+                    # não aparece sequer. Não há espera verdadeira a prometer nesse
+                    # caso, e dizer 1 s seria pior do que dizer cinco minutos.
                     if self._fichas:
                         mais_velhe = min(quando for _, quando in self._fichas.values())
                         return False, min(CHEIA_ESPERA, max(0.0, mais_velhe + DESCARTE_SEG - agora))

@@ -6,6 +6,7 @@ exactamente quando o balde enche.
 
 import threading
 import unittest
+from unittest import mock
 
 import limits
 
@@ -116,11 +117,12 @@ class RateLimitTest(unittest.TestCase):
         self.assertAlmostEqual(limite.fichas("pessoa-7"), 1000 - 1)
         self.assertTrue(limite.pega("pessoa-7")[0], "quem já estava cá continua a ter o seu balde")
 
-    def test_a_espera_da_mesa_cheia_e_a_hora_em_que_a_mesa_abre(self):
-        """A espera devolvida não é um número para Looks Like It Matters: é o
-        instante em que a chave mais antiga fica `DESCARTE_SEG` sem ninguém
-        tocar nela — e nesse instante, mesmo, o pedido passa. Prometer 1 s
-        mandava a pessoa voltar já e levar outra vez com o mesmo."""
+    def test_a_espera_aponta_para_o_momento_em_que_a_mesa_abre(self):
+        """A espera devolvida não é um número para encher: é o instante em que a
+        chave mais antiga fica `DESCARTE_SEG` sem ninguém tocar nela — e, enquanto
+        ninguém mexer na mesa nesse meio, é nesse instante mesmo que o pedido
+        passa. Prometer 1 s mandava a pessoa voltar já e levar outra vez com o
+        mesmo."""
         limite = limits.RateLimit(5, 1.0, relogio=self.relogio)
         for i in range(limits.MAX_CHAVES):
             limite.pega(f"pessoa-{i}")
@@ -128,7 +130,33 @@ class RateLimitTest(unittest.TestCase):
         self.assertFalse(pode)
         self.assertEqual(espera, limits.DESCARTE_SEG, "todas as chaves foram tocadas agora")
         self.relogio.passa(espera)
-        self.assertTrue(limite.pega("a-que-chega")[0], "passado o tempo prometido, entra mesmo")
+        self.assertTrue(limite.pega("a-que-chega")[0], "passado o tempo apontado, entra mesmo")
+
+    def test_a_estimativa_move_se_alguem_voltar_a_usar_a_mesa(self):
+        """A espera sai da mesa como ela está no instante do pedido. Se alguém
+        voltar a usar uma das chaves entretanto, o relógio dessa recomeça e o
+        espaço aparece mais tarde: por isso é uma estimativa, e não uma
+        garantia. É o que vai no `Retry-After`, e está escrito como tal."""
+        with mock.patch.object(limits, "MAX_CHAVES", 2):
+            limite = limits.RateLimit(5, 1.0, relogio=self.relogio)
+            limite.pega("ana")
+            limite.pega("bruno")
+            pode, espera = limite.pega("carlos")
+            self.assertFalse(pode)
+            self.assertAlmostEqual(espera, limits.DESCARTE_SEG)
+
+            self.relogio.passa(1)
+            limite.pega("ana")  # a ana volta: o relógio dela recomeça
+            self.relogio.passa(1)
+            limite.pega("bruno")  # e o do bruno também
+            self.relogio.passa(espera - 2)
+
+            self.assertFalse(limite.pega("carlos")[0],
+                             "no instante apontado, com as duas chaves ainda em uso, continua cheio")
+            _, nova = limite.pega("carlos")
+            self.assertAlmostEqual(nova, 1.0, msg="a nova estimativa aponta para a ana, a mais antiga")
+            self.relogio.passa(1)
+            self.assertTrue(limite.pega("carlos")[0], "um segundo depois, já passa")
 
     def test_a_espera_encolhe_quando_ja_ha_alguem_pronto_a_sair(self):
         """Se uma das chaves está quase a ser descartada, o espaço abre antes do
