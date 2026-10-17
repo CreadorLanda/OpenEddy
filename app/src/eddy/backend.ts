@@ -34,7 +34,8 @@ export interface Backend {
   web: boolean;
   /** Vozes para o formulário e a voz padrão; `note` = aviso para a tela inicial. */
   init(): Promise<{ voices: Record<string, string>; voice: string; note: string }>;
-  setProfile(p: Profile, voice?: string): Promise<void>;
+  /** `owner` é a conta da pessoa: o âmbito da memória. Só o núcleo desktop o usa. */
+  setProfile(p: Profile, voice?: string, owner?: string): Promise<void>;
   callStart(p: Profile): Promise<{ greeting: string; voice: string }>;
   /** `signal` aborta o pedido no meio (quando a pessoa interrompe a fala). */
   tts(text: string, voice: string, lang: string, signal?: AbortSignal): Promise<Response>;
@@ -57,8 +58,8 @@ const desktop: Backend = {
     else if (!health.model_ready) note = `Modelo ${health.model} não instalado: ./bin/ollama pull ${health.model}`;
     return { voices: meta.voices, voice: meta.eddy.voice, note };
   },
-  async setProfile(p, voice) {
-    await Promise.all([Api.profile(p), voice ? Api.config({ voice }) : Promise.resolve()]);
+  async setProfile(p, voice, owner) {
+    await Promise.all([Api.profile(p, owner), voice ? Api.config({ voice }) : Promise.resolve()]);
   },
   async callStart() {
     const r = await Api.callStart();

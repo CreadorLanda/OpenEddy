@@ -7,7 +7,9 @@ passa — nem o health, nem a voz, nem o turno.
 """
 
 import json
+import os
 import socket
+import tempfile
 import threading
 import unittest
 import urllib.error
@@ -19,6 +21,7 @@ import assistant
 import eleven
 import events
 import llm
+import memory
 import server
 import voice
 
@@ -100,6 +103,11 @@ class ServerTest(unittest.TestCase):
         patcher = mock.patch.object(server, "eddy", self.eddy)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # A memória de cada teste vive numa base temporária: a de quem está a
+        # correr a suíte nunca é tocada.
+        self.mem_dir = tempfile.TemporaryDirectory(prefix="openeddy-server-mem-")
+        self.addCleanup(self.mem_dir.cleanup)
+        self.eddy.memory = memory.Memory(os.path.join(self.mem_dir.name, "memory.db"))
         self.eddy.set_profile({"nome": "Zeca", "idade": 30, "idioma": "pt"})
 
         self.srv = ThreadingHTTPServer(("127.0.0.1", 0), server.Api)
@@ -117,6 +125,10 @@ class ServerTest(unittest.TestCase):
 
     def post(self, path, body=None, **kw):
         status, raw, headers = http(self.base, "POST", path, body if body is not None else {}, **kw)
+        return status, as_json(raw), headers
+
+    def delete(self, path, **kw):
+        status, raw, headers = http(self.base, "DELETE", path, None, **kw)
         return status, as_json(raw), headers
 
     def first_bytes(self, path, n=200, token=TOKEN):
@@ -386,6 +398,138 @@ class TtsTest(ServerTest):
             http(self.base, "POST", "/api/tts/stream", {"text": "olá", "voice": "pf_dora"})
         self.assertEqual(stream.call_args[0][1], "pf_dora")
         self.assertEqual(fala.call_args[0][1], "pf_dora")
+
+
+class MemoryRouteTest(ServerTest):
+    """A memória pela API: o âmbito é o dono ligado no núcleo, nunca o corpo."""
+
+    def entra(self, owner="ana"):
+        return self.post("/api/eddy/profile", {"nome": "Zeca", "idade": 30, "idioma": "pt", "owner": owner})
+
+    def test_sem_dono_a_memoria_diz_que_nao_da(self):
+        status, body, _ = self.get("/api/eddy/memory")
+        self.assertEqual(status, 400)
+        self.assertIn("dono", body["error"])
+
+    def test_comeca_desligada_e_vazia(self):
+        self.entra()
+        self.assertEqual(self.get("/api/eddy/memory")[1], {"enabled": False, "entries": []})
+
+    def test_o_ciclo_completo_pela_api(self):
+        self.entra()
+        self.assertEqual(self.post("/api/eddy/memory", {"enabled": True})[1], {"enabled": True})
+        _, guardado, _ = self.post("/api/eddy/memory/add", {"text": "mora em Luanda"})
+        self.assertTrue(guardado["id"] > 0)
+
+        _, estado, _ = self.get("/api/eddy/memory")
+        self.assertTrue(estado["enabled"])
+        self.assertEqual([e["text"] for e in estado["entries"]], ["mora em Luanda"])
+
+        _, apagado, _ = self.delete(f"/api/eddy/memory/{guardado['id']}")
+        self.assertTrue(apagado["deleted"])
+        self.assertEqual(self.get("/api/eddy/memory")[1]["entries"], [])
+
+    def test_desligar_mantem_o_que_esta_guardado(self):
+        self.entra()
+        self.post("/api/eddy/memory", {"enabled": True})
+        self.post("/api/eddy/memory/add", {"text": "mora em Luanda"})
+        self.assertEqual(self.post("/api/eddy/memory", {"enabled": False})[1], {"enabled": False})
+        self.assertEqual(len(self.get("/api/eddy/memory")[1]["entries"]), 1)
+
+    def test_esquecer_tudo(self):
+        self.entra()
+        self.post("/api/eddy/memory", {"enabled": True})
+        for texto in ("mora em Luanda", "bebe café"):
+            self.post("/api/eddy/memory/add", {"text": texto})
+        self.assertEqual(self.post("/api/eddy/memory/clear")[1], {"removed": 2})
+        self.assertEqual(self.get("/api/eddy/memory")[1]["entries"], [])
+
+    def test_a_memoria_de_outra_conta_nao_se_vê_nem_se_apaga(self):
+        self.entra("ana")
+        self.post("/api/eddy/memory", {"enabled": True})
+        _, guardado, _ = self.post("/api/eddy/memory/add", {"text": "mora em Luanda"})
+        self.entra("bruno")  # a mesma pessoa, outra conta
+        _, estado, _ = self.get("/api/eddy/memory")
+        self.assertFalse(estado["enabled"])
+        self.assertEqual(estado["entries"], [])
+        # e o id do outro não se apaga daqui
+        self.assertFalse(self.delete(f"/api/eddy/memory/{guardado['id']}")[1]["deleted"])
+        self.entra("ana")
+        self.assertEqual(len(self.get("/api/eddy/memory")[1]["entries"]), 1)
+
+    def test_o_corpo_do_pedido_nao_escolhe_o_ambito(self):
+        self.entra("ana")
+        self.post("/api/eddy/memory", {"enabled": True})
+        self.post("/api/eddy/memory/add", {"text": "mora em Luanda"})
+        self.post("/api/eddy/memory/add", {"text": "segredo do bruno", "owner": "bruno"})
+        _, estado, _ = self.get("/api/eddy/memory", )  # o GET também não leva dono
+        self.assertEqual([e["text"] for e in estado["entries"]], ["segredo do bruno", "mora em Luanda"])
+        self.assertEqual(self.post("/api/eddy/memory/clear", {"owner": "bruno"})[1], {"removed": 2})
+
+    # ── validação ─────────────────────────────────────────────────────────────
+
+    def test_um_enabled_que_nao_se_booleano_e_recusado(self):
+        self.entra()
+        for valor in ("sim", 1, None):
+            with self.subTest(valor=valor):
+                status, body, _ = self.post("/api/eddy/memory", {"enabled": valor})
+                self.assertEqual((status, "error" in body), (400, True))
+
+    def test_um_facto_vazio_ou_sem_texto_e_recusado(self):
+        self.entra()
+        self.post("/api/eddy/memory", {"enabled": True})
+        for corpo in ({}, {"text": "   "}):
+            with self.subTest(corpo=corpo):
+                self.assertEqual(self.post("/api/eddy/memory/add", corpo)[0], 400)
+
+    def test_apagar_um_id_que_nao_e_numero_e_uma_rota_desconhecida(self):
+        self.entra()
+        self.assertEqual(self.delete("/api/eddy/memory/abc")[0], 404)
+
+    def test_apagar_o_que_nao_existe_diz_que_nao_apagou(self):
+        self.entra()
+        self.assertEqual(self.delete("/api/eddy/memory/999")[1], {"deleted": False})
+
+    def test_tudo_isto_exige_o_token_da_sessao(self):
+        self.entra()
+        for method, rota, corpo in (("GET", "/api/eddy/memory", None),
+                                    ("POST", "/api/eddy/memory", {"enabled": True}),
+                                    ("POST", "/api/eddy/memory/add", {"text": "oi"}),
+                                    ("POST", "/api/eddy/memory/clear", {}),
+                                    ("DELETE", "/api/eddy/memory/1", None)):
+            with self.subTest(rota=rota):
+                status, _, _ = http(self.base, method, rota, corpo, token=None)
+                self.assertEqual(status, 401)
+
+    # ── a conversa ────────────────────────────────────────────────────────────
+
+    def test_o_turno_injecta_a_memoria_da_conta_ativa(self):
+        self.entra("ana")
+        self.post("/api/eddy/memory", {"enabled": True})
+        self.post("/api/eddy/memory/add", {"text": "mora em Luanda"})
+        with mock.patch.object(llm, "chat", return_value={"content": "boa"}) as chat:
+            self.post_sse("/api/eddy/turn", {"text": "em que cidade moro?"})
+        sistema = chat.call_args[0][1][0]["content"]
+        self.assertIn("mora em Luanda", sistema)
+
+    def test_o_turno_nao_injecta_memoria_de_outra_conta(self):
+        self.entra("ana")
+        self.post("/api/eddy/memory", {"enabled": True})
+        self.post("/api/eddy/memory/add", {"text": "mora em Luanda"})
+        self.entra("bruno")
+        self.post("/api/eddy/memory", {"enabled": True})
+        with mock.patch.object(llm, "chat", return_value={"content": "boa"}) as chat:
+            self.post_sse("/api/eddy/turn", {"text": "em que cidade moro?"})
+        self.assertNotIn("mora em Luanda", chat.call_args[0][1][0]["content"])
+
+    def test_a_memoria_nunca_entra_na_conversa_da_chamada(self):
+        self.entra()
+        self.post("/api/eddy/memory", {"enabled": True})
+        self.post("/api/eddy/memory/add", {"text": "mora em Luanda"})
+        with mock.patch.object(llm, "chat", return_value={"content": "boa"}):
+            self.post_sse("/api/eddy/turn", {"text": "olá"})
+        for mensagem in self.eddy.history:
+            self.assertNotIn("mora em Luanda", mensagem["content"])
 
 
 class ResetRouteTest(ServerTest):

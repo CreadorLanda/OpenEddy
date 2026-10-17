@@ -33,6 +33,9 @@ DATA = os.path.join(
 )
 CONVERSATIONS = os.path.join(DATA, "conversations")
 WORKSPACE = os.path.join(DATA, "workspace")
+# O que o Eddy se lembra entre chamadas, se a pessoa deixar. Fica aqui, ao lado
+# do resto do estado, nunca no repositório.
+MEMORY_DB = os.path.join(DATA, "memory.db")
 
 for _d in (DATA, CONVERSATIONS, WORKSPACE):
     os.makedirs(_d, exist_ok=True)

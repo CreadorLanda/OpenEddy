@@ -12,6 +12,7 @@ import threading
 
 import eleven
 import llm
+import memory
 import web
 
 STYLE = """Você é o EDDY, o sistema de casa inteligente da série Lab Rats (Disney XD), agora morando no computador de {nome}.
@@ -197,7 +198,9 @@ def _nicks(p: dict) -> list[str]:
     return _apelidos(p["sexo"], p["idade"], p["idioma"])
 
 
-def system_prompt(p: dict) -> str:
+def system_prompt(p: dict, memoria: str = "") -> str:
+    """A persona. `memoria` são factos que a pessoa mandou guardar: entram no
+    fim, marcados como dados, e não trocam uma vírgula do que está acima."""
     sexo = {"masculino": "homem", "feminino": "mulher"}.get(p["sexo"], "pessoa")
     quem = f"{p['nome']}, {sexo}, {p['idade']} anos."
     if p["idade"] < 18:
@@ -205,7 +208,7 @@ def system_prompt(p: dict) -> str:
     L = LANGS[p["idioma"]]
     return STYLE.format(nome=p["nome"], quem=quem, lingua=L["lingua"], exemplo=L["exemplo"],
                         apelidos=", ".join(f'"{a}"' for a in _nicks(p)),
-                        falas="\n".join(f'- "{f}"' for f in L["falas"]))
+                        falas="\n".join(f'- "{f}"' for f in L["falas"])) + memoria
 
 
 def greeting(p: dict) -> str:
@@ -261,6 +264,10 @@ class Eddy:
         self.publish = threading.Lock()
         self._calls = itertools.count(1)  # next() não cede o meio: duas ligações não trocam a geração
         self.call = next(self._calls)
+        # A memória entre chamadas é um extra opt-in e só existe se a pessoa der
+        # um dono (o username da conta). Sem dono é como se estivesse desligada.
+        self.memory = memory.Memory()
+        self.owner: str | None = None
 
     def settings(self):
         return {"voice": self.voice, "profile": self.profile}
@@ -270,13 +277,31 @@ class Eddy:
             self.voice = str(data["voice"])
         return self.settings()
 
-    def set_profile(self, data):
+    def set_profile(self, data, owner=None):
+        """`owner` é a conta da pessoa (o username do Puter): o âmbito da memória.
+        Sem dono, a memória fica desligada — é o estado de omissão."""
         profile = clean_profile(data)
+        dono = str(owner).strip()[:80] if owner else ""
         with self.publish:
             self.call = next(self._calls)  # o perfil novo zera a conversa: o que ficou a pensar é antigo
             self.profile = profile
             self.history = []
+            self.owner = dono or None
         return self.settings()
+
+    def memoria(self, text: str) -> str:
+        """O bloco de factos para o prompt, ou "" se não há nada para dizer.
+
+        Qualquer falha aqui — base fechada, disco cheio, esquema do futuro — dá
+        uma chamada exactamente igual à de sempre. A memória nunca é um requisito
+        para conversar.
+        """
+        if not self.owner:
+            return ""
+        try:
+            return memory.bloco(self.memory.search(self.owner, text))
+        except Exception:  # noqa: BLE001 — um extra não pode rebentar a chamada
+            return ""
 
     @property
     def lang(self) -> str:
@@ -360,7 +385,10 @@ class Eddy:
                 answer, extra = routed
                 publicar(answer)
             else:
-                messages = ([{"role": "system", "content": system_prompt(self.profile)}]
+                # O que a pessoa mandou guardar entra no prompt de sistema como
+                # dado, nunca como conversa: a memória não mistura-se no history.
+                messages = ([{"role": "system",
+                              "content": system_prompt(self.profile, self.memoria(text))}]
                             + self.history[-12:] + [{"role": "user", "content": text}])
                 answer = llm.chat(llm.model(), messages, on_token=publicar,
                                   should_stop=lambda: self.call != call)["content"]

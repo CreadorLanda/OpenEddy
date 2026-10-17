@@ -11,6 +11,7 @@ import type { Profile } from "../core/types";
 import { EddyFace, type FaceState } from "./eddy";
 import { Ringer } from "./ring";
 import { B, LINKS } from "./backend";
+import { memoryPanel } from "./memory";
 import { caption, readPcm, SpeechQueue, voiceText, splitAtTags } from "./speech";
 import * as Puter from "./puter";
 
@@ -299,7 +300,7 @@ function profileScreen(first: boolean) {
         await Puter.saveProfile(next);
         profile = next;
         voice = voiceSel.value;
-        await B.setProfile(next, voice);
+        await B.setProfile(next, voice, username || undefined);
         homeScreen();
       } catch (e) {
         err.textContent = (e as Error).message;
@@ -314,6 +315,9 @@ function profileScreen(first: boolean) {
     h("label", {}, "Idioma do Eddy"), h("div", { class: "segs" }, ...langs),
     B.web ? null : h("label", {}, "Voz do Eddy"),
     B.web ? null : voiceSel,
+    // A memória precisa do dono ligado no núcleo, por isso só aparece depois do
+    // primeiro perfil guardado.
+    first ? null : memoryPanel(!B.web, () => profileScreen(false)),
     err,
     h("div", { class: "row" }, first ? null : h("button", { type: "button", class: "ghost", onclick: () => homeScreen() }, "Cancelar"), save),
   );
@@ -650,7 +654,7 @@ async function afterLogin() {
   await ready;
   profile = await Puter.loadProfile();
   if (!profile) return profileScreen(true);
-  await B.setProfile(profile);
+  await B.setProfile(profile, undefined, username || undefined);
   homeScreen();
 }
 

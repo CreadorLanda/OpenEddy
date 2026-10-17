@@ -88,7 +88,7 @@ export const Api = {
   health: () => call<{ ollama: boolean; models: string[]; model: string; model_ready: boolean; voice: boolean }>("GET", "/api/health"),
   meta: () => call<{ voices: Record<string, string>; eddy: { voice: string } }>("GET", "/api/meta"),
   config: (c: { voice?: string }) => call("POST", "/api/eddy/config", c),
-  profile: (p: Profile) => call("POST", "/api/eddy/profile", p),
+  profile: (p: Profile, owner?: string) => call("POST", "/api/eddy/profile", owner ? { ...p, owner } : p),
   callStart: () => call<{ text: string; voice: string }>("POST", "/api/eddy/call/start"),
   callSilence: (final = false) => call<{ text: string }>("POST", "/api/eddy/call/silence", { final }),
   listenCancel: () => call("POST", "/api/eddy/listen/cancel"),
@@ -115,6 +115,13 @@ export const Api = {
     if (!res.ok) throw new Error(((await res.json()) as { error?: string }).error ?? res.statusText);
     return res.arrayBuffer();
   },
+
+  // ── memória entre chamadas (issue #1) ──────────────────────────────────────
+  memory: () => call<MemoryStatus>("GET", "/api/eddy/memory"),
+  memoryToggle: (enabled: boolean) => call<{ enabled: boolean }>("POST", "/api/eddy/memory", { enabled }),
+  memoryAdd: (text: string) => call<{ id: number; text: string }>("POST", "/api/eddy/memory/add", { text }),
+  memoryDelete: (id: number) => call<{ deleted: boolean }>("DELETE", `/api/eddy/memory/${id}`),
+  memoryClear: () => call<{ removed: number }>("POST", "/api/eddy/memory/clear"),
 };
 
 export interface NewsItem {
@@ -123,6 +130,18 @@ export interface NewsItem {
   link: string;
   summary: string;
   image: string | null;
+}
+
+/** Um facto guardado. O âmbito é decidido pelo núcleo: estas rotas não levam dono. */
+export interface MemoryEntry {
+  id: number;
+  text: string;
+  created: number;
+}
+
+export interface MemoryStatus {
+  enabled: boolean;
+  entries: MemoryEntry[];
 }
 
 /** Assina o barramento de eventos do núcleo, reconectando sozinho. */
