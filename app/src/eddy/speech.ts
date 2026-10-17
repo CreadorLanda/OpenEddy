@@ -1,10 +1,9 @@
-// A fala do Eddy: a fila que corta a resposta nas marcações, pede a voz de cada
-// pedaço e deixa de falar quando a pessoa interrompe.
+// Voz do Eddy: o texto, a fila que o corta nas marcações e a leitura do áudio.
 //
-// Não há DOM aqui dentro de propósito: a fila é testável sozinha, com as portas
-// (voz, áudio, legenda) injetadas por quem chama — o app passa o Web Audio, os
-// testes passam dublês. É a parte que decide o que é fala, o que é resposta velha
-// e quando o Eddy cala a boca.
+// O que decide o que o Eddy fala — o que é fala, o que é resposta velha e o que
+// já não interessa porque a pessoa interrompeu — vive aqui, sem DOM: a rede
+// entra por `fetchVoice`, o áudio por `play`. É o que dá para testar sem
+// navegador e sem serviço pago.
 
 import { expressionForTag, type Expression } from "./eddy";
 
@@ -58,11 +57,56 @@ export function splitAtTags(text: string): string[] {
   return out.map((p) => p.trim()).filter(Boolean);
 }
 
+/**
+ * Lê o PCM do corpo da resposta em blocos de ~120 ms e entrega cada bloco a
+ * `onBlock`. Devolve false se a pessoa interrompeu no meio — nesse caso o leitor
+ * é cancelado (e a leitura pendente solta-se de imediato, sem esperar o servidor
+ * mandar mais áudio) e `onBlock` não é mais chamado.
+ */
+export async function readPcm(
+  body: ReadableStream<Uint8Array>,
+  rate: number,
+  signal: AbortSignal,
+  onBlock: (pcm: Uint8Array) => void,
+): Promise<boolean> {
+  const reader = body.getReader();
+  const onAbort = () => {
+    void reader.cancel().catch(() => {});
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+  let pend = new Uint8Array(0);
+  const minBytes = Math.round(rate * 0.12) * 2;
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (signal.aborted) return false;
+      if (value) {
+        const joined = new Uint8Array(pend.length + value.length);
+        joined.set(pend);
+        joined.set(value, pend.length);
+        pend = joined;
+      }
+      if (pend.length >= minBytes || (done && pend.length >= 2)) {
+        const n = pend.length >> 1;
+        onBlock(pend.subarray(0, n * 2));
+        pend = pend.slice(n * 2);
+      }
+      if (done) break;
+    }
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+  return true;
+}
+
 export interface SpeechPorts {
-  /** Voz de um pedaço: a resposta HTTP crua, ou null se não deu para pedir. */
-  fetchVoice(text: string): Promise<Response | null>;
+  /**
+   * Voz de um pedaço: a resposta HTTP crua, ou null se não deu para pedir.
+   * `signal` aborta o pedido quando a pessoa interrompe a fala.
+   */
+  fetchVoice(text: string, signal: AbortSignal): Promise<Response | null>;
   /** Toca a resposta e devolve quando o áudio acaba (ou quando `stop` corta). */
-  play(res: Response, token: number): Promise<void>;
+  play(res: Response, token: number, signal: AbortSignal): Promise<void>;
   /** Voz de reserva: a do próprio navegador. */
   speakLocal(text: string, token: number): Promise<void>;
   /** Corta o áudio que estiver tocando agora. */
@@ -79,12 +123,23 @@ export class SpeechQueue {
   private waiters: (() => void)[] = [];
   /** O servidor recusou a voz (limite do dia): daí em diante é a do navegador. */
   private voiceOff = false;
+  /**
+   * Uma sessão = uma fala que pode ser interrompida. O `stop` aborta o sinal:
+   * os pedidos em voo morrem e as leituras pendentes soltam-se. O controller
+   * novo é para a fala seguinte, que não pode herdar a interrupção.
+   */
+  private abort = new AbortController();
 
   constructor(private ports: SpeechPorts) {}
 
   /** A geração da fala em curso; muda a cada `stop` (respostas velhas são velhas). */
   get current(): number {
     return this.token;
+  }
+
+  /** O sinal da sessão: abortado assim que a pessoa interrompe. */
+  get signal(): AbortSignal {
+    return this.abort.signal;
   }
 
   /** Verdadeiro enquanto há alguma coisa para falar (na fila ou tocando). */
@@ -96,7 +151,7 @@ export class SpeechQueue {
   say(text: string) {
     for (const t of splitAtTags(voiceText(text))) {
       if (!caption(t)) continue;
-      this.enqueue(this.voiceOff ? Promise.resolve(null) : this.ports.fetchVoice(t), t);
+      this.enqueue(this.voiceOff ? Promise.resolve(null) : this.ports.fetchVoice(t, this.signal), t);
     }
   }
 
@@ -106,9 +161,11 @@ export class SpeechQueue {
     if (!this.running) void this.drain();
   }
 
-  /** Corta tudo: para o áudio, joga fora a fila e invalida as respostas a caminho. */
+  /** Corta tudo: aborta os pedidos, para o áudio, joga fora a fila e invalida as respostas a caminho. */
   stop() {
     this.token++;
+    this.abort.abort();
+    this.abort = new AbortController();
     this.queue = [];
     this.ports.stopAll();
     this.running = false;
@@ -124,15 +181,24 @@ export class SpeechQueue {
   private async drain() {
     this.running = true;
     const my = this.token;
+    const signal = this.signal;
     while (this.queue.length && my === this.token) {
       const item = this.queue.shift()!;
-      const res = await item.res;
+      let res: Response | null;
+      try {
+        res = await item.res;
+      } catch {
+        // O pedido não deu resposta nenhuma — interrompido, rede em baixo, o
+        // que for. O pedaço salta-se e a fila continua; a voz do navegador só
+        // entra quando o servidor respondeu (mesmo a recusar).
+        continue;
+      }
       if (my !== this.token) continue; // a pessoa interrompeu enquanto o áudio chegava
       this.ports.onSpeak?.(item.expr);
       try {
         if (res && res.ok) {
           this.ports.onStatus?.("Eddy falando… (Espaço interrompe)");
-          await this.ports.play(res, my);
+          await this.ports.play(res, my, signal);
         } else {
           if (res) {
             const why = ((await res.json().catch(() => ({}))) as { error?: string }).error ?? res.statusText;

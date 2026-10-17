@@ -11,7 +11,7 @@ import type { Profile } from "../core/types";
 import { EddyFace, type FaceState } from "./eddy";
 import { Ringer } from "./ring";
 import { B, LINKS } from "./backend";
-import { caption, SpeechQueue, voiceText, splitAtTags } from "./speech";
+import { caption, readPcm, SpeechQueue, voiceText, splitAtTags } from "./speech";
 import * as Puter from "./puter";
 
 const root = document.getElementById("root")!;
@@ -141,7 +141,7 @@ function schedule(buf: AudioBuffer): Promise<void> {
   });
 }
 
-async function play(res: Response, my: number) {
+async function play(res: Response, my: number, signal: AbortSignal) {
   const ctx = ensureAudio();
   const type = res.headers.get("content-type") ?? "";
   if (!type.startsWith("audio/pcm") || !res.body) {
@@ -150,33 +150,18 @@ async function play(res: Response, my: number) {
     return;
   }
   const rate = Number(/rate=(\d+)/.exec(type)?.[1] ?? 24000);
-  const minBytes = Math.round(rate * 0.12) * 2;
-  const reader = res.body.getReader();
-  let pend = new Uint8Array(0);
   let last: Promise<void> = Promise.resolve();
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (my !== speech.current) {
-      void reader.cancel();
-      return;
-    }
-    if (value) {
-      const joined = new Uint8Array(pend.length + value.length);
-      joined.set(pend);
-      joined.set(value, pend.length);
-      pend = joined;
-    }
-    if (pend.length >= minBytes || (done && pend.length >= 2)) {
-      const n = pend.length >> 1;
-      const view = new DataView(pend.buffer, pend.byteOffset, n * 2);
-      const buf = ctx.createBuffer(1, n, rate);
-      const ch = buf.getChannelData(0);
-      for (let i = 0; i < n; i++) ch[i] = view.getInt16(i * 2, true) / 32768;
-      pend = pend.slice(n * 2);
-      last = schedule(buf);
-    }
-    if (done) break;
-  }
+  // A leitura solta-se no `stop`: o sinal da sessão abortado cancela o leitor,
+  // mesmo que o servidor esteja calado há segundos (ver speech.readPcm).
+  const inteira = await readPcm(res.body, rate, signal, (pcm) => {
+    const n = pcm.byteLength >> 1;
+    const view = new DataView(pcm.buffer, pcm.byteOffset, n * 2);
+    const buf = ctx.createBuffer(1, n, rate);
+    const ch = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) ch[i] = view.getInt16(i * 2, true) / 32768;
+    last = schedule(buf);
+  });
+  if (!inteira) return; // interrompido: o áudio que restou não toca
   await last;
 }
 
@@ -208,7 +193,7 @@ function speakLocal(text: string, my: number): Promise<void> {
 // A fila (cortar nas marcações, descartar resposta velha, cair na voz do
 // navegador quando o servidor recusa) mora em speech.ts; aqui só o Web Audio.
 const speech = new SpeechQueue({
-  fetchVoice: (t) => B.tts(t, voice, lang()).catch(() => null),
+  fetchVoice: (t, signal) => B.tts(t, voice, lang(), signal).catch(() => null),
   play,
   speakLocal,
   stopAll() {
@@ -440,8 +425,10 @@ async function startCall() {
     const [r] = await Promise.all([B.callStart(profile!), B.openMic()]);
     greeting = r.greeting;
     if (r.voice) voice = r.voice;
-    // o "alô" (cortado nas marcações) já começa a chegar enquanto ainda toca
-    hello = splitAtTags(voiceText(greeting)).map((text) => ({ text, res: B.tts(text, voice, lang()).catch(() => null) }));
+    // o "alô" (cortado nas marcações) já começa a chegar enquanto ainda toca. Vai
+    // com o sinal da sessão: se a pessoa desligar enquanto o telefone toca, o
+    // pedido morre com a chamada em vez de continuar a ser sintetizado.
+    hello = splitAtTags(voiceText(greeting)).map((text) => ({ text, res: B.tts(text, voice, lang(), speech.signal).catch(() => null) }));
     await Promise.all([hello[0]?.res, sleep(Math.max(0, 3300 - (performance.now() - t0)))]);
   } catch (e) {
     ringer!.stop();

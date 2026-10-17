@@ -96,12 +96,13 @@ export const Api = {
   turn: (text: string, onEvent: (ev: Record<string, unknown>) => void) => stream("/api/eddy/turn", { text }, onEvent),
   news: () => call<{ items: NewsItem[] }>("GET", "/api/news"),
   /** Fala em streaming: devolve a resposta crua (PCM da ElevenLabs ou WAV do Kokoro). */
-  async ttsStream(text: string, voice?: string): Promise<Response> {
+  async ttsStream(text: string, voice?: string, signal?: AbortSignal): Promise<Response> {
     const b = await backendInfo();
     return fetch(b.url + "/api/tts/stream", {
       method: "POST",
       headers: { "X-Eddy-Token": b.token, "Content-Type": "application/json" },
       body: JSON.stringify({ text, voice }),
+      signal,
     });
   },
   async tts(text: string, voice?: string): Promise<ArrayBuffer> {

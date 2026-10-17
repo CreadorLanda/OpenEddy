@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { caption, exprOf, SpeechQueue, splitAtTags, voiceText, type SpeechPorts } from "./speech";
+import { caption, exprOf, readPcm, SpeechQueue, splitAtTags, voiceText, type SpeechPorts } from "./speech";
 
 describe("legend and voice text", () => {
   it("takes the tags out of the caption but keeps them for the voice", () => {
@@ -119,7 +119,8 @@ describe("the speech queue", () => {
     const { queue, fetchVoice, play } = fakeQueue();
     queue.enqueue(late, "resposta antiga");
     queue.say("segunda parte da frase");
-    expect(fetchVoice).toHaveBeenCalledWith("segunda parte da frase");
+    expect(fetchVoice.mock.calls[0][0]).toBe("segunda parte da frase");
+    expect(fetchVoice.mock.calls[0][1].aborted).toBe(false); // o pedido nasce vivo
     queue.stop();
     deliver(new Response("antiga", { status: 200 }));
     await queue.idle();
@@ -155,6 +156,98 @@ describe("the speech queue", () => {
   });
 });
 
+// Issue #4: interromper a fala tem de matar o pedido em voo, não só o áudio.
+describe("cancelling the requests in flight", () => {
+  /** Um fetch que só acaba quando o sinal aborta, como um pedido real. */
+  function pendingFetch(cancelled: () => void) {
+    return (_text: string, signal: AbortSignal) =>
+      new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          cancelled();
+          reject(new DOMException("The user aborted a request.", "AbortError"));
+        });
+      });
+  }
+
+  it("aborts the request that was still waiting for the response headers", async () => {
+    let cancelled = 0;
+    const { queue, play, speakLocal } = fakeQueue({
+      fetchVoice: vi.fn(pendingFetch(() => void cancelled++)),
+    });
+    queue.say("[sighs] Bom dia, garoto.");
+    await new Promise((r) => setTimeout(r, 0));
+    queue.stop();
+    await queue.idle();
+    expect(cancelled).toBe(1);
+    expect(play).not.toHaveBeenCalled();
+    // a voz do navegador não fala a frase que a pessoa acabou de interromper
+    expect(speakLocal).not.toHaveBeenCalled();
+  });
+
+  it("gives every request the signal of its own session", async () => {
+    const sinais: AbortSignal[] = [];
+    const { queue } = fakeQueue({
+      fetchVoice: vi.fn((_t: string, signal: AbortSignal) => {
+        sinais.push(signal);
+        return new Promise<Response>(() => {});
+      }),
+    });
+    queue.say("primeira frase da ligação");
+    const antes = queue.signal;
+    queue.stop();
+    queue.say("segunda frase da ligação");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sinais).toHaveLength(2);
+    expect(sinais[0]).toBe(antes);
+    expect(sinais[0].aborted).toBe(true); // a primeira fala foi interrompida
+    expect(sinais[1].aborted).toBe(false); // a segunda não herdou a interrupção
+  });
+
+  it("keeps talking after a stop when the next request is asked for again", async () => {
+    let pedir = 0;
+    const { queue, play } = fakeQueue({
+      fetchVoice: vi.fn((_t: string, signal: AbortSignal) => {
+        if (pedir++ === 0) return pendingFetch(() => {})(_t, signal);
+        return Promise.resolve(new Response("áudio novo", { status: 200 }));
+      }),
+    });
+    queue.say("[sighs] frase interrompida");
+    await new Promise((r) => setTimeout(r, 0));
+    queue.stop();
+    queue.say("[laughs] frase nova depois da interrupção");
+    await queue.idle();
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(play.mock.calls[0][0].status).toBe(200);
+    expect(queue.speaking).toBe(false);
+  });
+
+  it("survives a stop on top of another stop", async () => {
+    const { queue, play, stopAll } = fakeQueue();
+    queue.say("primeira frase");
+    queue.stop();
+    queue.stop();
+    expect(stopAll).toHaveBeenCalledTimes(2);
+    queue.say("[laughs] e depois desta");
+    await queue.idle();
+    expect(play).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let an aborted request raise the voice error", async () => {
+    // O fetch rejeita com AbortError quando se interrompe: isso não é uma falha
+    // de voz, não é para sair nada na legenda nem cair na voz do navegador.
+    const { queue, play, speakLocal, onStatus } = fakeQueue({
+      fetchVoice: vi.fn((_t: string, signal: AbortSignal) => pendingFetch(() => {})(_t, signal)),
+    });
+    queue.say("[sighs] a interromper");
+    await new Promise((r) => setTimeout(r, 0));
+    queue.stop();
+    await queue.idle();
+    expect(play).not.toHaveBeenCalled();
+    expect(speakLocal).not.toHaveBeenCalled();
+    expect(onStatus).not.toHaveBeenCalled();
+  });
+});
+
 describe("when the server voice is gone", () => {
   it("speaks with the browser when the request itself failed", async () => {
     const { queue, play, speakLocal, onStatus } = fakeQueue({ fetchVoice: vi.fn(async () => null) });
@@ -185,5 +278,86 @@ describe("when the server voice is gone", () => {
     await queue.idle();
     expect(fetchVoice).toHaveBeenCalledTimes(1);
     expect(speakLocal).toHaveBeenCalledTimes(2);
+  });
+});
+// Issue #4, metade do servidor: a leitura do corpo da resposta tem de se soltar
+// quando a pessoa interrompe, mesmo com o servidor calado.
+describe("reading the PCM that is still coming", () => {
+  const RATE = 24000;
+
+  /** Corpo que entrega o que lhe mandam e fica à espera quando acaba. */
+  function body(...partes: Uint8Array[]) {
+    let i = 0;
+    return new ReadableStream<Uint8Array>({
+      pull(ctrl) {
+        if (i < partes.length) ctrl.enqueue(partes[i++]);
+        else ctrl.close();
+      },
+    });
+  }
+
+  const pcm = (n: number, byte = 1) => new Uint8Array(n).fill(byte);
+
+  it("hands over blocks of about 120 ms and finishes at the end of the stream", async () => {
+    const ctrl = new AbortController();
+    const blocos: number[] = [];
+    // 4800 amostras = 9600 bytes = 200 ms: dá um bloco inteiro e sobras
+    const inteira = await readPcm(body(pcm(9600), pcm(9600), pcm(4)), RATE, ctrl.signal, (b) => blocos.push(b.byteLength));
+    expect(inteira).toBe(true);
+    expect(blocos).toEqual([9600, 9600, 4]);
+  });
+
+  it("keeps the leftovers for the next block", async () => {
+    const ctrl = new AbortController();
+    const blocos: number[] = [];
+    await readPcm(body(pcm(10), pcm(9590), pcm(10)), RATE, ctrl.signal, (b) => blocos.push(b.byteLength));
+    expect(blocos).toEqual([9600, 10]);
+  });
+
+  it("releases the pending read when the session is aborted mid-stream", async () => {
+    // o servidor já mandou um bloco e depois cala-se: sem isto, a leitura ficava
+    // pendurada até o servidor decidir mandar mais áudio (ou a ligação cair)
+    let fechado = false;
+    let libertado = () => {};
+    const preso = new Promise<void>((r) => (libertado = r));
+    const stream = new ReadableStream<Uint8Array>({
+      start(ctrl) {
+        ctrl.enqueue(pcm(9600));
+      },
+      pull() {
+        return preso;
+      },
+      cancel() {
+        fechado = true;
+        libertado();
+      },
+    });
+    const ctrl = new AbortController();
+    const blocos: number[] = [];
+    const leitura = readPcm(stream, RATE, ctrl.signal, (b) => blocos.push(b.byteLength));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(blocos).toHaveLength(1);
+
+    ctrl.abort();
+    expect(await leitura).toBe(false);
+    expect(fechado).toBe(true); // o leitor foi cancelado, não ficou à espera
+  });
+
+  it("gives up without touching the stream when it is already aborted", async () => {
+    const ctrl = new AbortController();
+    ctrl.abort();
+    const blocos: number[] = [];
+    expect(await readPcm(body(pcm(9600)), RATE, ctrl.signal, (b) => blocos.push(b.byteLength))).toBe(false);
+    expect(blocos).toEqual([]);
+  });
+
+  it("drops the abort listener when the stream ends", async () => {
+    const ctrl = new AbortController();
+    const add = vi.spyOn(ctrl.signal, "addEventListener");
+    const remove = vi.spyOn(ctrl.signal, "removeEventListener");
+    await readPcm(body(pcm(10)), RATE, ctrl.signal, () => {});
+    expect(add).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
+    // sem isto, cada fala deixava um listener pendurado no sinal da sessão
+    expect(remove).toHaveBeenCalledWith("abort", add.mock.calls[0][1]);
   });
 });

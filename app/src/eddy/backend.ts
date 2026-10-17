@@ -36,7 +36,8 @@ export interface Backend {
   init(): Promise<{ voices: Record<string, string>; voice: string; note: string }>;
   setProfile(p: Profile, voice?: string): Promise<void>;
   callStart(p: Profile): Promise<{ greeting: string; voice: string }>;
-  tts(text: string, voice: string, lang: string): Promise<Response>;
+  /** `signal` aborta o pedido no meio (quando a pessoa interrompe a fala). */
+  tts(text: string, voice: string, lang: string, signal?: AbortSignal): Promise<Response>;
   openMic(): Promise<void>;
   closeMic(): void;
   hear(o: HearOptions): Promise<string>;
@@ -63,7 +64,7 @@ const desktop: Backend = {
     const r = await Api.callStart();
     return { greeting: r.text, voice: r.voice };
   },
-  tts: (text, voice) => Api.ttsStream(text, voice),
+  tts: (text, voice, _lang, signal) => Api.ttsStream(text, voice, signal),
   async openMic() {},
   closeMic() {},
   async hear() {
@@ -146,11 +147,12 @@ const web: Backend = {
     seenSilence = [];
     return { greeting: r.greeting, voice: "" };
   },
-  tts: (text, _voice, lang) =>
+  tts: (text, _voice, lang, signal) =>
     fetch("/api/web/tts", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${puter()?.authToken ?? ""}` },
       body: JSON.stringify({ text, lang }),
+      signal,
     }),
   openMic: () => mic.open(),
   closeMic: () => mic.close(),
