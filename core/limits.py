@@ -13,7 +13,8 @@ import threading
 import time
 
 # Uma chave parada há tanto tempo já não interessa: volta ao balde cheio, que é
-# como nasceria. Sem isto o dicionário crescia com cada pessoa que já passou aqui.
+# como nasceria. `MAX_CHAVES` é o tecto duro: é o número máximo de chaves que
+# chega a existir, não um aviso. Ver `RateLimit.pega`.
 DESCARTE_SEG = 300.0
 MAX_CHAVES = 1000
 
@@ -32,9 +33,17 @@ class RateLimit:
     def pega(self, chave):
         agora = self._relogio()
         with self._lock:
-            if len(self._fichas) >= MAX_CHAVES:
+            conhecidos = self._fichas.get(chave)
+            if conhecidos is None and len(self._fichas) >= MAX_CHAVES:
                 self._descarta(agora)
-            fichas, quando = self._fichas.get(chave, (self.capacidade, agora))
+                if len(self._fichas) >= MAX_CHAVES:
+                    # Tecto duro, e com a mesa cheia o que se recusa é quem chega.
+                    # Evitar o balde de alguém para meter outro seria uma porta
+                    # aberta: uma enxurrada de chaves novas reiniciava os baldes
+                    # dos outros e o limite deixava de valer. Assim ninguém
+                    # perde o seu, e a mesa nunca passa de `MAX_CHAVES`.
+                    return False, self.espera()
+            fichas, quando = conhecidos if conhecidos else (self.capacidade, agora)
             fichas = min(self.capacidade, fichas + max(0.0, agora - quando) * self.por_segundo)
             if fichas >= 1:
                 self._fichas[chave] = (fichas - 1, agora)

@@ -291,14 +291,24 @@ class Web(BaseHTTPRequestHandler):
             out = route(self, user, body)
             if out is not None:
                 self._json(out)
-        except TimeoutError:
-            # Um serviço lá fora não respondeu a tempo. Não é culpa de quem
-            # pediu, e não é um 500: o código que distingue "tente outra vez" de
-            # "isto está partido" é o 504.
-            try:
-                self._json({"error": "um serviço lá fora demorou demais. Tenta outra vez."}, 504)
-            except Exception:
-                pass
+        except (TimeoutError, urllib.error.URLError) as e:
+            # `urlopen` atira `TimeoutError` cru no connect/read e, noutros
+            # caminhos, embrulha-o num `URLError`. Os dois são "não respondeu a
+            # tempo" e valem um 504 — não é culpa de quem pediu, e o código que
+            # distingue "tente outra vez" de "isto está partido" é este. O que
+            # não for timeout (uma DNS que não resolve, um 500 de alguém) fica
+            # a ser o 500 de sempre, com o traceback no log do servidor.
+            if _passou_do_tempo(e):
+                try:
+                    self._json({"error": "um serviço lá fora demorou demais. Tenta outra vez."}, 504)
+                except Exception:
+                    pass
+            else:
+                traceback.print_exc()
+                try:
+                    self._json({"error": str(e)}, 500)
+                except Exception:
+                    pass
         except ValueError as e:
             self._json({"error": str(e)}, 400)
         except (BrokenPipeError, ConnectionResetError):
@@ -316,6 +326,17 @@ class Web(BaseHTTPRequestHandler):
 
 def _profile(body):
     return assistant.clean_profile(body.get("profile") or {})
+
+
+def _passou_do_tempo(e):
+    """Se a exceção é um pedido ao exterior que passou do tempo. O `urlopen` dá
+    `TimeoutError` cru no connect e no read, e embrulha-o em `URLError` noutros
+    caminhos; `socket.timeout` é o mesmo `TimeoutError` desde o Python 3.10.
+    Uma `URLError` por outro motivo (DNS, ligação recusada, 500 de alguém) não
+    é disto."""
+    if isinstance(e, TimeoutError):
+        return True
+    return isinstance(e, urllib.error.URLError) and isinstance(getattr(e, "reason", None), TimeoutError)
 
 
 def r_start(h, user, body):

@@ -10,6 +10,7 @@ import contextlib
 import json
 import os
 import shutil
+import socket
 import tempfile
 import threading
 import unittest
@@ -400,6 +401,51 @@ class LimitesTest(WebServerTest):
         self.assertEqual(status, 504)
         self.assertIn("demorou demais", body["error"])
 
+    def test_um_timeout_vencido_pelo_urlopen_e_504(self):
+        """O `urlopen` embrulha o timeout num `URLError` em vez de o atirar
+        cru. É o mesmo "não respondeu a tempo" e tem de dar o mesmo 504 — com a
+        mensagem curta, sem o URL do serviço do dono do servidor e sem traceback
+        nenhum na cara de quem pediu."""
+        erro = urllib.error.URLError(socket.timeout("timed out"))
+        with mock.patch.object(webapp.assistant.web, "weather", side_effect=erro), \
+                mock.patch.object(webapp.traceback, "print_exc") as log:
+            status, body, _ = self.post("/api/web/route", {"text": "clima"})
+        self.assertEqual(status, 504)
+        self.assertEqual(list(body), ["error"])
+        self.assertIn("demorou demais", body["error"])
+        self.assertNotIn("open-meteo", body["error"], "o URL do serviço não sai para o browser")
+        log.assert_not_called()
+
+    def test_um_timeout_cru_tambem_nao_deixa_traceback(self):
+        with mock.patch.object(webapp.assistant.web, "weather", side_effect=TimeoutError()), \
+                mock.patch.object(webapp.traceback, "print_exc") as log:
+            status, body, _ = self.post("/api/web/route", {"text": "clima"})
+        self.assertEqual(status, 504)
+        self.assertIn("demorou demais", body["error"])
+        log.assert_not_called()
+
+    def test_uma_rede_quebrada_nao_vira_504(self):
+        """Só o tempo esgotado é 504. Uma DNS que não resolve, ou alguém que
+        devolveu 500, continuam a ser 500 — dizer "tenta outra vez" a quem tem
+        de esperar por outra coisa seria mentira."""
+        for erro in (urllib.error.URLError("nome não resolvido"),
+                     urllib.error.HTTPError("https://api.exemplo.pt", 500, "caiu", {}, None),
+                     urllib.error.URLError(ConnectionResetError("resetado"))):
+            with self.subTest(erro=type(erro).__name__):
+                with mock.patch.object(webapp.assistant.web, "weather", side_effect=erro):
+                    status, _, _ = self.post("/api/web/route", {"text": "clima"})
+                self.assertEqual(status, 500)
+
+    def test_o_504_tem_o_mesmo_jeito_aconteça_como_o_timeout(self):
+        """As duas maneiras de o exterior passar do tempo têm de dar
+        exatamente a mesma resposta."""
+        respostas = []
+        for erro in (TimeoutError("passou do tempo"),
+                     urllib.error.URLError(socket.timeout("timed out"))):
+            with mock.patch.object(webapp.assistant.web, "weather", side_effect=erro):
+                respostas.append(self.post("/api/web/route", {"text": "clima"})[:2])
+        self.assertEqual(respostas[0], respostas[1])
+
     def test_o_504_nao_parte_o_servidor(self):
         with mock.patch.object(webapp.assistant.web, "weather", side_effect=TimeoutError("caiu")):
             self.post("/api/web/route", {"text": "clima"})
@@ -420,6 +466,56 @@ class LimitesTest(WebServerTest):
             self.assertIsNone(PUTER_USER_REAL("token-novo"))
             self.assertEqual(webapp.LUGARES_PUTER.livres(), 1)
             self.assertIsNone(PUTER_USER_REAL("outro-token"))
+
+
+class TimeoutRealTest(WebServerTest):
+    """O timeout a sério, não uma excepção injectada: um servidor local que
+    aceita a ligação e nunca responde. O `urlopen` atira o que atiraria com um
+    jornal em baixo, e a resposta tem de ser a mesma."""
+
+    def setUp(self):
+        super().setUp()
+        self.calado = socket.socket()
+        self.calado.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.calado.bind(("127.0.0.1", 0))
+        self.calado.listen(5)
+        self.addCleanup(self.calado.close)
+        self.porta = self.calado.getsockname()[1]
+        self.ligacoes = []
+        threading.Thread(target=self._engolir, daemon=True).start()
+
+    def _engolir(self):
+        while True:
+            try:
+                ligacao, _ = self.calado.accept()
+            except OSError:
+                return
+            self.ligacoes.append(ligacao)  # fica aberta, e calada
+
+    def test_um_servico_que_nunca_responde_da_504(self):
+        def calado(url, timeout=12, **kw):
+            return urllib.request.urlopen(f"http://127.0.0.1:{self.porta}/", timeout=0.3).read()
+
+        with mock.patch.object(webapp.assistant.web, "http_get", calado), \
+                mock.patch.object(webapp.traceback, "print_exc") as log:
+            status, body, _ = self.post("/api/web/route", {"text": "clima em Luanda"})
+        self.assertEqual(status, 504)
+        self.assertIn("demorou demais", body["error"])
+        log.assert_not_called()
+        self.assertTrue(self.ligacoes, "o urlopen foi mesmo bater ao servidor calado")
+
+    def test_as_maneiras_como_o_urlopen_atira_um_timeout(self):
+        """Medido contra a rede, não de memória: um timeout de leitura vem como
+        `TimeoutError` cru, um timeout de ligação vem embrulhado num `URLError`
+        com `reason` a ser `TimeoutError`. Os dois têm de ser 504. Uma DNS que
+        não existe dá `URLError` mas com `reason` a ser `gaierror` — essa não
+        é timeout, e é um 500."""
+        self.assertTrue(webapp._passou_do_tempo(TimeoutError("timed out")))
+        self.assertTrue(webapp._passou_do_tempo(urllib.error.URLError(socket.timeout("timed out"))))
+        self.assertFalse(webapp._passou_do_tempo(urllib.error.URLError(socket.gaierror("não existe"))))
+        self.assertFalse(webapp._passou_do_tempo(urllib.error.HTTPError("u", 504, "", {}, None)))
+        self.assertFalse(webapp._passou_do_tempo(urllib.error.URLError(ConnectionResetError("reset"))))
+        self.assertFalse(webapp._passou_do_tempo(RuntimeError("qualquer outra coisa")))
 
 
 class TtsTest(WebServerTest):

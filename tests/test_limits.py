@@ -91,6 +91,40 @@ class RateLimitTest(unittest.TestCase):
         self.limite.pega("outra")
         self.assertIn("pessoa-0", self.limite._fichas, "ainda não é tempo de esquecer")
 
+    def test_a_mesa_cheia_recusa_quem_chega_em_vez_de_crescer(self):
+        """O tecto é duro: com `MAX_CHAVES` pessoas todas a usar, a
+        chave nova é recusada e o dicionário não passa do tecto. Descarregar o
+        balde de alguém para meter outro dava a uma enxurrada a forma de
+        reiniciar os baldes dos outros."""
+        limite = limits.RateLimit(1000, 1.0, relogio=self.relogio)
+        for i in range(limits.MAX_CHAVES):
+            self.assertTrue(limite.pega(f"pessoa-{i}")[0])
+        self.assertEqual(len(limite._fichas), limits.MAX_CHAVES)
+        self.relogio.passa(60)  # toda a gente continua a passar pelo servidor
+        for i in range(limits.MAX_CHAVES):
+            limite.pega(f"pessoa-{i}")
+        pode, espera = limite.pega("a-que-chega")
+        self.assertFalse(pode)
+        self.assertGreater(espera, 0)
+        self.assertEqual(len(limite._fichas), limits.MAX_CHAVES, "o tecto é o tecto")
+
+    def test_a_mesa_cheia_nao_toca_no_balde_de_ninguem(self):
+        limite = limits.RateLimit(1000, 1.0, relogio=self.relogio)
+        for i in range(limits.MAX_CHAVES):
+            limite.pega(f"pessoa-{i}")
+        limite.pega("a-que-chega")  # recusada
+        self.assertAlmostEqual(limite.fichas("pessoa-7"), 1000 - 1)
+        self.assertTrue(limite.pega("pessoa-7")[0], "quem já estava cá continua a ter o seu balde")
+
+    def test_a_mesa_descongela_quando_a_gente_se_cansa(self):
+        limite = limits.RateLimit(1, 0.0, relogio=self.relogio)
+        for i in range(limits.MAX_CHAVES):
+            limite.pega(f"pessoa-{i}")
+        self.assertFalse(limite.pega("a-que-chega")[0])
+        self.relogio.passa(limits.DESCARTE_SEG + 1)
+        self.assertTrue(limite.pega("a-que-chega")[0], "espaço aberto, entra")
+        self.assertEqual(len(limite._fichas), 1)
+
 
 class SemaforoTest(unittest.TestCase):
     def test_o_numero_de_lugares_e_o_pedido(self):
