@@ -9,7 +9,8 @@ Diferente do app no PC, aqui o servidor é compartilhado e não guarda estado:
   - atalhos (notícias, clima, hora) e o roteiro do Eddy (prompt, "alô").
 
 Todo pedido de /api precisa do token Puter da pessoa (Authorization: Bearer),
-conferido em api.puter.com/whoami. A ElevenLabs tem limite por pessoa e por dia.
+conferido em api.puter.com/whoami. A ElevenLabs tem limite por pessoa e por dia,
+e os atalhos têm balde de fichas por pessoa e semáforo (ver `LIMITES`).
 
 Só stdlib: nada de numpy, Kokoro, Whisper nem Ollama aqui.
 
@@ -34,6 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import assistant  # noqa: E402
 import eleven  # noqa: E402
 from config import DATA, ELEVEN_VOICE  # noqa: E402
+from limits import RateLimit, Semaforo  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.realpath(os.environ.get("EDDY_WEB_ROOT") or os.path.join(HERE, "..", "app", "dist"))
@@ -51,6 +53,52 @@ TTS_CHARS_ALL = int(os.environ.get("EDDY_TTS_CHARS_TOTAL", "60000"))
 STT_SESSIONS_USER = int(os.environ.get("EDDY_STT_PER_USER", "150"))
 # Usuários Puter sem limite (o dono do servidor), separados por vírgula.
 UNLIMITED = {u.strip() for u in os.environ.get("EDDY_UNLIMITED_USERS", "").split(",") if u.strip()}
+
+
+# ── limites por pessoa e de concorrência ───────────────────────────────────────
+#
+# Protecções que já existiam e não são repetidas aqui: o token da Puter em todos
+# os /api, os orçamentos diários de `Usage` (voz por pessoa e do servidor, e
+# microfone), e os timeouts de `web.http_get`. O que faltava era o que vem a
+# seguir — as respostas em si (`/api/web/start`) e os atalhos (`/api/web/route`,
+# `/api/web/silence`) podiam ser pedidos sem parar.
+#
+# Cada rota tem o seu balde porque não custam o mesmo: `start` dá o prompt e o
+# "alô" (nada de rede), `silence` dá uma frase (idem), e `route` é o único que
+# sai para fora — é o que ganha também o semáforo, porque é o que pode ficar
+# à espera de um RSS lento. Os números são folgados de propósito: um pedido
+# recusado aparece como erro na cara de quem estava a conversar, e o silêncio é
+# o único sítio onde a pessoa não fez nada para o merecer.
+
+START_BURST = float(os.environ.get("EDDY_START_BURST", "10"))
+START_REFILL = float(os.environ.get("EDDY_START_REFILL", "0.2"))
+ROUTE_BURST = float(os.environ.get("EDDY_ROUTE_BURST", "20"))
+ROUTE_REFILL = float(os.environ.get("EDDY_ROUTE_REFILL", "0.5"))
+SILENCE_BURST = float(os.environ.get("EDDY_SILENCE_BURST", "30"))
+SILENCE_REFILL = float(os.environ.get("EDDY_SILENCE_REFILL", "1"))
+# Quantos atalhos caros o servidor inteiro atende ao mesmo tempo (sem fila:
+# quem não entra recebe 503 em vez de ficar à espera).
+ROUTE_MAX = int(os.environ.get("EDDY_ROUTE_MAX", "8"))
+# Quantas conferências de token Puter ao mesmo tempo. Cada token novo é uma
+# saída para a internet com 10 s de espera: sem este tecto, uma enxurrada de
+# tokens inventados prende uma thread por pedido. Quem não entra é recusado com
+# 401 e pode tentar outra vez — o token continua no cache quando é válido.
+PUTER_MAX = int(os.environ.get("EDDY_PUTER_MAX", "16"))
+
+
+def _limites():
+    """Um conjunto novo de limites. Existe como função para os testes partirem
+    sempre de um balde virgem, sem que o pedido anterior fique a contar."""
+    return {
+        "/api/web/start": (RateLimit(START_BURST, START_REFILL), None),
+        "/api/web/route": (RateLimit(ROUTE_BURST, ROUTE_REFILL), Semaforo(ROUTE_MAX)),
+        "/api/web/silence": (RateLimit(SILENCE_BURST, SILENCE_REFILL), None),
+    }
+
+
+LIMITES = _limites()
+LUGARES_PUTER = Semaforo(PUTER_MAX)
+
 
 LINKS = {
     "github": "https://github.com/CreadorLanda/OpenEddy",
@@ -76,11 +124,15 @@ def puter_user(token: str) -> str | None:
         if hit and hit[0] > now:
             return hit[1]
     req = urllib.request.Request("https://api.puter.com/whoami", headers={"Authorization": f"Bearer {token}"})
+    if not LUGARES_PUTER.adquirir():  # já há quem a conferir tokens: não se junta à fila
+        return None
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             user = json.loads(r.read()).get("username")
     except Exception:
         return None
+    finally:
+        LUGARES_PUTER.largar()
     if user:
         with _who_lock:
             if len(_who) > 5000:
@@ -155,17 +207,28 @@ class Web(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
 
-    def _send(self, code, body=b"", ctype="application/json", cache="no-store"):
+    def _send(self, code, body=b"", ctype="application/json", cache="no-store", extra=None):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", cache)
+        for nome, valor in (extra or {}).items():
+            self.send_header(nome, valor)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
 
     def _json(self, data, code=200):
         self._send(code, json.dumps(data, ensure_ascii=False).encode())
+
+    def _recusa(self, msg, code, espera):
+        """Resposta a um pedido que não entra: o mesmo formato de erro de sempre,
+        mais o `Retry-After` que o HTTP usa para dizer quando se pode voltar.
+        Um limite absoluto (reposição a zero) dá uma espera infinita: diz-se o
+        mesmo que para qualquer outro, cinco minutos."""
+        espera = min(espera, 300.0)
+        self._send(code, json.dumps({"error": msg}, ensure_ascii=False).encode(),
+                   extra={"Retry-After": str(max(1, int(espera) + 1))})
 
     def _body(self):
         n = int(self.headers.get("Content-Length") or 0)
@@ -209,9 +272,33 @@ class Web(BaseHTTPRequestHandler):
         if not user:
             return self._json({"error": "entre com o Puter primeiro"}, 401)
         try:
-            out = route(self, user, self._body())
+            # O corpo lê-se antes dos limites: responder sem o ler deixaria o
+            # pedido pela metade na ligação e o próximo pedido no mesmo
+            # socket leria lixo. São 64 KB no máximo, é barato de ler e é
+            # descartado a seguir.
+            body = self._body()
+        except ValueError as e:
+            return self._json({"error": str(e)}, 400)
+        limite, semaforo = LIMITES.get(path, (None, None))
+        if limite:
+            pode, espera = limite.pega(user)
+            if not pode:
+                return self._recusa("calma aí: estás a pedir depressa demais. Tenta daqui a pouco.",
+                                    429, espera)
+        if semaforo and not semaforo.adquirir():
+            return self._recusa("o Eddy está a atender toda a gente. Tenta daqui a pouco.", 503, 0.0)
+        try:
+            out = route(self, user, body)
             if out is not None:
                 self._json(out)
+        except TimeoutError:
+            # Um serviço lá fora não respondeu a tempo. Não é culpa de quem
+            # pediu, e não é um 500: o código que distingue "tente outra vez" de
+            # "isto está partido" é o 504.
+            try:
+                self._json({"error": "um serviço lá fora demorou demais. Tenta outra vez."}, 504)
+            except Exception:
+                pass
         except ValueError as e:
             self._json({"error": str(e)}, 400)
         except (BrokenPipeError, ConnectionResetError):
@@ -222,6 +309,9 @@ class Web(BaseHTTPRequestHandler):
                 self._json({"error": str(e)}, 500)
             except Exception:
                 pass
+        finally:
+            if semaforo:
+                semaforo.largar()  # nem que a rota tenha falhado a meio
 
 
 def _profile(body):

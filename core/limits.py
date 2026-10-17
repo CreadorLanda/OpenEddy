@@ -1,0 +1,85 @@
+"""Limites de uso por pessoa e de concorrência.
+
+Duas peças pequenas para o mesmo problema: um pedido a mais não pode ficar à
+espera de ninguém, tem de ser recusado. `RateLimit` conta pedidos por chave (a
+conta da pessoa) num balde de fichas; `Semaforo` limita quantas operações ao
+mesmo tempo — sem fila, e sem prender quem não tem nada a ver.
+
+Só stdlib. O relógio vem por argumento (`time.monotonic` por omissão) para os
+testes serem determinísticos em vez de dependerem de `sleep`.
+"""
+
+import threading
+import time
+
+# Uma chave parada há tanto tempo já não interessa: volta ao balde cheio, que é
+# como nasceria. Sem isto o dicionário crescia com cada pessoa que já passou aqui.
+DESCARTE_SEG = 300.0
+MAX_CHAVES = 1000
+
+
+class RateLimit:
+    """Balde de fichas por chave: `capacidade` fichas guardadas e `por_segundo`
+    fichas a encher. `pega()` devolve (True, 0) ou (False, segundos a esperar)."""
+
+    def __init__(self, capacidade, por_segundo, relogio=time.monotonic):
+        self.capacidade = float(capacidade)
+        self.por_segundo = float(por_segundo)
+        self._relogio = relogio
+        self._fichas: dict[str, tuple[float, float]] = {}  # chave → (fichas, quando)
+        self._lock = threading.Lock()
+
+    def pega(self, chave):
+        agora = self._relogio()
+        with self._lock:
+            if len(self._fichas) >= MAX_CHAVES:
+                self._descarta(agora)
+            fichas, quando = self._fichas.get(chave, (self.capacidade, agora))
+            fichas = min(self.capacidade, fichas + max(0.0, agora - quando) * self.por_segundo)
+            if fichas >= 1:
+                self._fichas[chave] = (fichas - 1, agora)
+                return True, 0.0
+            self._fichas[chave] = (fichas, agora)
+            return False, self.espera(fichas)
+
+    def espera(self, fichas=0.0):
+        """Quantos segundos faltam para a chave ter uma ficha. Com `por_segundo`
+        a zero o balde nunca enche: o limite é absoluto."""
+        if self.por_segundo <= 0:
+            return float("inf")
+        return max(0.0, (1.0 - fichas) / self.por_segundo)
+
+    def fichas(self, chave):
+        with self._lock:
+            return self._fichas.get(chave, (self.capacidade, 0.0))[0]
+
+    def _descarta(self, agora):
+        for chave, (_, quando) in list(self._fichas.items()):
+            if agora - quando > DESCARTE_SEG:
+                del self._fichas[chave]
+
+
+class Semaforo:
+    """No máximo `n` operações ao mesmo tempo. Sem fila: quem não entra recebe
+    False logo, para não bloquear quem chegou depois. `largar()` nunca passa do
+    `n`, mesmo que seja chamada a mais — um `finally` a mais não cria lugares."""
+
+    def __init__(self, n):
+        self.n = max(0, int(n))
+        self._livres = self.n
+        self._lock = threading.Lock()
+
+    def adquirir(self):
+        with self._lock:
+            if self._livres <= 0:
+                return False
+            self._livres -= 1
+            return True
+
+    def largar(self):
+        with self._lock:
+            self._livres = min(self.n, self._livres + 1)
+
+    def livres(self):
+        with self._lock:
+            return self._livres
