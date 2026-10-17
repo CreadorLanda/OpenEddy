@@ -68,12 +68,42 @@ export async function searchImages(q: string, signal?: AbortSignal): Promise<Pic
   return [];
 }
 
-/** O painel com as imagens: uma de cada vez, setas para trocar, crédito embaixo. */
-export function galleryPanel(q: string, pics: Pic[], onClose: () => void): HTMLElement {
+/** Carrega a imagem de verdade antes de mostrar (o Openverse às vezes demora). */
+function preload(src: string, ms = 10000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const im = new Image();
+    const t = window.setTimeout(() => resolve(false), ms);
+    im.onload = () => (window.clearTimeout(t), resolve(true));
+    im.onerror = () => (window.clearTimeout(t), resolve(false));
+    im.src = src;
+  });
+}
+
+export interface Gallery {
+  el: HTMLElement;
+  /** Mostra as imagens quando a primeira já carregou; false se nenhuma abriu. */
+  show(pics: Pic[]): Promise<boolean>;
+  /** Não achou nada (ou deu erro): troca a busca pelo aviso. */
+  empty(why?: string): void;
+}
+
+/**
+ * O painel das imagens. Nasce PROCURANDO (varredura animada) e só troca para a
+ * imagem quando ela já carregou — o Eddy nunca diz "aí está" para uma tela vazia.
+ */
+export function galleryPanel(q: string, onClose: () => void): Gallery {
+  let pics: Pic[] = [];
   let i = 0;
   const img = h("img", { alt: "" }) as HTMLImageElement;
   const credit = h("a", { class: "credit" });
   const pos = h("span", { class: "who" });
+  const searching = h("div", { class: "searching" },
+    h("div", { class: "scan" }, h("span", { class: "beam" })),
+    h("p", {}, `Procurando “${q}”`, h("span", { class: "dots" }, h("i", {}, "."), h("i", {}, "."), h("i", {}, "."))),
+  );
+  const pic = h("div", { class: "pic" }, searching);
+  const prev = h("button", { type: "button", class: "ghost", title: "Anterior", hidden: true }, "‹");
+  const next = h("button", { type: "button", class: "ghost", title: "Próxima", hidden: true }, "›");
   const paint = () => {
     const p = pics[i];
     img.src = p.thumb;
@@ -86,15 +116,42 @@ export function galleryPanel(q: string, pics: Pic[], onClose: () => void): HTMLE
     i = (i + d + pics.length) % pics.length;
     paint();
   };
-  const nav = pics.length > 1
-    ? [h("button", { type: "button", class: "ghost", title: "Anterior", onclick: () => step(-1) }, "‹"), h("button", { type: "button", class: "ghost", title: "Próxima", onclick: () => step(1) }, "›")]
-    : [];
-  paint();
-  return h(
+  prev.addEventListener("click", () => step(-1));
+  next.addEventListener("click", () => step(1));
+  // uma imagem quebrada no meio da lista: sai dela e segue para a próxima
+  img.addEventListener("error", () => {
+    if (pics.length <= 1) return;
+    pics.splice(i, 1);
+    i %= pics.length;
+    paint();
+  });
+  const el = h(
     "div",
-    { class: "gallery" },
-    h("header", { class: "panel-head" }, h("b", {}, `🔍 ${q}`), pos, h("div", { class: "grow" }), ...nav, h("button", { type: "button", class: "ghost", title: "Fechar", onclick: onClose }, "×")),
-    h("div", { class: "pic" }, img),
+    { class: "gallery loading" },
+    h("header", { class: "panel-head" }, h("b", {}, `🔍 ${q}`), pos, h("div", { class: "grow" }), prev, next, h("button", { type: "button", class: "ghost", title: "Fechar", onclick: onClose }, "×")),
+    pic,
     credit,
   );
+  return {
+    el,
+    async show(found) {
+      // a primeira que abrir de verdade vai na frente
+      for (let k = 0; k < Math.min(found.length, 4); k++) {
+        if (await preload(found[k].thumb)) {
+          pics = found.slice(k);
+          i = 0;
+          paint();
+          pic.replaceChildren(img);
+          el.classList.remove("loading");
+          prev.hidden = next.hidden = pics.length < 2;
+          return true;
+        }
+      }
+      return false;
+    },
+    empty(why = "Nada encontrado.") {
+      el.classList.remove("loading");
+      pic.replaceChildren(h("p", { class: "muted" }, why));
+    },
+  };
 }

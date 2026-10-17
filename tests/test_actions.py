@@ -53,7 +53,7 @@ class DetectTest(unittest.TestCase):
         self.assertLess(len(actions.context_note("x" * 5000)), 400)
 
     def test_every_action_and_game_line_has_a_fallback_in_every_language(self):
-        keys = ["a_image", "a_blocked", "a_theme", "a_game", "img_none", "g_start", "g_took",
+        keys = ["a_image", "a_blocked", "a_theme", "a_game", "img_none", "img_found", "g_start", "g_took",
                 "g_lost_piece", "g_check", "g_in_check", "g_taunt", "g_losing",
                 "game_won", "game_lost", "game_draw", "game_quit"]
         for lang in ("pt", "en", "es"):

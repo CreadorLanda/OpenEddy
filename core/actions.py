@@ -144,9 +144,10 @@ def note(action: dict) -> str:
         d = ("A pessoa pediu para ver uma imagem imprópria. Recuse com desdém e superioridade, "
              "sem repetir o pedido nem descrever nada, e mude de assunto. 1 frase.")
     elif kind == "image":
-        d = (f"A pessoa pediu para ver imagens de “{action.get('query', '')}”. Elas estão aparecendo "
-             "na tela dela agora, buscadas por você. Comente com sarcasmo que um gênio como você "
-             "virou buscador de imagens. NÃO descreva a imagem (você não a vê). 1 frase curta.")
+        d = (f"A pessoa pediu para ver imagens de “{action.get('query', '')}”. Você está PROCURANDO "
+             "agora — elas AINDA NÃO apareceram. Diga que está procurando, com sarcasmo (um gênio "
+             "como você virou buscador de imagens). NUNCA diga que já mostrou, nem 'aqui está', nem "
+             "descreva a imagem. 1 frase curta.")
     elif kind == "theme":
         to = {"classic": "o visual clássico, branco com linhas pretas",
               "holo": "o holograma azul de sempre"}.get(action.get("to"), "um visual novo")

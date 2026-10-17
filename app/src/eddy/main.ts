@@ -779,19 +779,30 @@ function closeGallery() {
 }
 
 async function showImages(q: string) {
+  if (!call.area) return;
   const gen = call.gen;
+  // o painel abre já procurando: a pessoa vê que o Eddy está atrás da imagem
+  closeGallery();
+  const g = galleryPanel(q, closeGallery);
+  call.gallery = g.el;
+  call.area.append(g.el);
+  refreshSide();
   let pics: Pic[] = [];
+  let why = "";
   try {
     pics = await searchImages(q);
   } catch (e) {
-    if (gen === call.gen) setStatus("Imagens: " + (e as Error).message);
+    why = (e as Error).message;
   }
-  if (gen !== call.gen || !call.area) return;
-  if (!pics.length) return interject(sceneFallback(scenes, "img_none"));
-  closeGallery();
-  call.gallery = galleryPanel(q, pics, closeGallery);
-  call.area.append(call.gallery);
-  refreshSide();
+  if (gen !== call.gen || call.gallery !== g.el) return; // desligou ou fechou o painel
+  if (pics.length && (await g.show(pics))) {
+    if (gen === call.gen && call.gallery === g.el) interject(sceneFallback(scenes, "img_found"));
+    return;
+  }
+  if (gen !== call.gen || call.gallery !== g.el) return;
+  g.empty(why ? `Não deu: ${why}.` : "Nada encontrado.");
+  interject(sceneFallback(scenes, "img_none"));
+  window.setTimeout(() => call.gallery === g.el && closeGallery(), 4000);
 }
 
 function doAction(a: Action) {

@@ -295,3 +295,25 @@ body.classic .game-banner { background: rgba(255, 255, 255, .85); color: #111; }
 body.classic .call-btn { background: #22c55e; color: #fff; }
 body.classic .hangup { background: #ef4444; color: #fff; }
 body.classic .sq.last { background-image: repeating-linear-gradient(45deg, rgba(0, 0, 0, .2) 0 2px, transparent 2px 7px); }
+
+/* procurando imagem: varredura do holograma */
+.gallery .searching { display: flex; flex-direction: column; align-items: center; gap: 14px; color: #9fc6d4; }
+.gallery .searching p { margin: 0; font-size: 14px; }
+.gallery .scan {
+  position: relative; width: min(260px, 60vw); aspect-ratio: 4 / 3; border: 2px dashed rgba(110, 228, 255, .45); border-radius: 10px; overflow: hidden;
+  background: repeating-linear-gradient(0deg, rgba(110, 228, 255, .06) 0 2px, transparent 2px 9px);
+}
+.gallery .scan .beam {
+  position: absolute; left: 0; right: 0; height: 28%; top: -28%;
+  background: linear-gradient(to bottom, transparent, rgba(110, 228, 255, .45), transparent);
+  animation: scan 1.3s ease-in-out infinite alternate;
+}
+@keyframes scan { to { top: 100%; } }
+.dots i { font-style: normal; animation: dot 1.2s infinite; }
+.dots i:nth-child(2) { animation-delay: .2s; }
+.dots i:nth-child(3) { animation-delay: .4s; }
+@keyframes dot { 0%, 60%, 100% { opacity: .15; } 30% { opacity: 1; } }
+.gallery img { animation: pop .3s; }
+body.classic .gallery .searching { color: #333; }
+body.classic .gallery .scan { border-color: #111; background: repeating-linear-gradient(0deg, rgba(0, 0, 0, .06) 0 2px, transparent 2px 9px); }
+body.classic .gallery .scan .beam { background: linear-gradient(to bottom, transparent, rgba(0, 0, 0, .25), transparent); }
