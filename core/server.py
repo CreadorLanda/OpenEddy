@@ -212,8 +212,9 @@ def _sem_dono():
     return eddy.owner
 
 
-def memory_status(h, query):
-    return {"enabled": eddy.memory.enabled(_sem_dono()), "entries": eddy.memory.listing(_sem_dono())}
+def memory_status(h, query):  # `query` é o que o router passa a todas as rotas GET
+    dono = _sem_dono()
+    return {"enabled": eddy.memory.enabled(dono), "entries": eddy.memory.listing(dono)}
 
 
 def memory_toggle(h):
