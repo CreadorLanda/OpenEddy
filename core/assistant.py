@@ -11,6 +11,7 @@ import threading
 
 import eleven
 import llm
+import scenes
 import web
 
 STYLE = """Você é o EDDY, o sistema de casa inteligente da série Lab Rats (Disney XD), agora morando no computador de {nome}.
@@ -273,6 +274,21 @@ class Eddy:
         threading.Thread(target=llm.warm_up, args=(llm.model(),), daemon=True).start()
         return greeting(self.profile)
 
+    def scene_line(self, kind: str) -> str:
+        """Fala de uma cena sem fala da pessoa (ligar de volta, voltar do gelo…)."""
+        if kind in ("hold", "hold_back"):
+            return scenes.fallback(kind, self.lang)
+        with self.lock:
+            messages = ([{"role": "system", "content": system_prompt(self.profile)}]
+                        + self.history[-12:] + [{"role": "user", "content": scenes.note(kind).strip()}])
+            try:
+                line = llm.chat(llm.model(), messages)["content"]
+                line = re.sub(r"(?s)<think>.*?</think>", "", line).strip() or scenes.fallback(kind, self.lang)
+            except Exception:
+                line = scenes.fallback(kind, self.lang)
+            self.history.append({"role": "assistant", "content": line})
+            return line
+
     def silence_line(self, final=False):
         line = silence_line(self.profile, final, self.seen)
         self.seen.append(line)
@@ -291,16 +307,24 @@ class Eddy:
     def turn(self, text, on_token):
         """Uma fala da pessoa na ligação. Devolve {text, ...extras}."""
         with self.lock:
-            routed = self._route(text)
+            event = scenes.detect(text, self.lang)
+            routed = None if event else self._route(text)
             if routed:
                 answer, extra = routed
                 on_token(answer)
             else:
+                content = text + (scenes.note(event) if event else "")
                 messages = ([{"role": "system", "content": system_prompt(self.profile)}]
-                            + self.history[-12:] + [{"role": "user", "content": text}])
-                answer = llm.chat(llm.model(), messages, on_token=on_token)["content"]
-                answer = re.sub(r"(?s)<think>.*?</think>", "", answer).strip()
-                extra = {}
+                            + self.history[-12:] + [{"role": "user", "content": content}])
+                try:
+                    answer = llm.chat(llm.model(), messages, on_token=on_token)["content"]
+                    answer = re.sub(r"(?s)<think>.*?</think>", "", answer).strip()
+                except Exception:
+                    if not event:
+                        raise
+                    answer = scenes.fallback(event, self.lang)
+                    on_token(answer)
+                extra = {"event": event} if event else {}
             self.history += [{"role": "user", "content": text},
                              {"role": "assistant", "content": answer}]
             self.history = self.history[-24:]

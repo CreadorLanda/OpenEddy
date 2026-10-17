@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import events  # noqa: E402
 import llm  # noqa: E402
+import scenes  # noqa: E402
 import voice  # noqa: E402
 import web  # noqa: E402
 from assistant import Eddy  # noqa: E402
@@ -201,6 +202,17 @@ def listen_cancel(h):
     return {"ok": True}
 
 
+def scene(h):
+    kind = str(h._body().get("kind", ""))
+    if kind not in scenes.DIRECTIONS and kind not in ("hold", "hold_back"):
+        raise ValueError("cena desconhecida")
+    return {"text": eddy.scene_line(kind)}
+
+
+def scenes_bundle(h, query):
+    return scenes.bundle(eddy.lang)
+
+
 def call_silence(h):
     return {"text": eddy.silence_line(final=bool(h._body().get("final")))}
 
@@ -266,6 +278,8 @@ ROUTES = [
     ("POST", r"/api/eddy/profile", eddy_profile),
     ("POST", r"/api/eddy/call/start", call_start),
     ("POST", r"/api/eddy/call/silence", call_silence),
+    ("POST", r"/api/eddy/scene", scene),
+    ("GET", r"/api/eddy/scenes", scenes_bundle),
     ("POST", r"/api/eddy/listen", eddy_listen),
     ("POST", r"/api/eddy/listen/cancel", listen_cancel),
     ("POST", r"/api/tts", tts),

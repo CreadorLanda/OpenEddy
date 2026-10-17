@@ -108,6 +108,12 @@ export class EddyFace {
   private ringClock = 0;
   private smoothLevel = 0;
 
+  /** Sinal ruim: o holograma treme e pisca por alguns segundos. */
+  glitch(seconds: number) {
+    this.glitchUntil = this.t + seconds;
+    this.nextGlitch = this.t + seconds + 3;
+  }
+
   update(dt: number) {
     this.t += dt;
     const s = this.state;

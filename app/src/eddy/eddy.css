@@ -149,3 +149,18 @@ button.big { padding: 12px 26px; font-size: 15px; border-radius: 12px; }
 .links a.kofi { color: #ffd2cf; border-color: #5a2b2a; background: rgba(40, 14, 14, .55); }
 .links a.kofi:hover { color: #fff; border-color: #ff5e5b; }
 .home-foot { position: absolute; left: 0; right: 0; bottom: 20px; z-index: 3; }
+
+/* ── cenas ── */
+.incoming .answer-row { display: flex; gap: 72px; margin-top: 30px; }
+.incoming .answer-labels { display: flex; gap: 72px; margin-top: 8px; font-size: 12px; color: #7fa6b5; }
+.incoming .answer-labels span { width: 68px; text-align: center; }
+.ringing-btn { animation: wiggle 2.2s infinite; }
+@keyframes wiggle { 0%, 70%, 100% { transform: rotate(0); } 75%, 85%, 95% { transform: rotate(-12deg); } 80%, 90% { transform: rotate(12deg); } }
+.stage { position: absolute; top: 58px; left: 0; right: 0; display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 4; pointer-events: none; }
+.badge { padding: 7px 14px; border-radius: 999px; font: 600 13px var(--mono, monospace); animation: pop .25s cubic-bezier(.2, .9, .3, 1.4); }
+@keyframes pop { from { transform: scale(.6); opacity: 0; } }
+.badge.rec { color: #fff; background: rgba(239, 68, 68, .85); box-shadow: 0 0 24px rgba(239, 68, 68, .5); animation: pop .25s, recblink 1s steps(1) infinite .25s; }
+@keyframes recblink { 50% { opacity: .55; } }
+.badge.ice { color: #dff8ff; background: rgba(30, 80, 110, .8); border: 1px solid #5fb7d6; }
+.ended.slammed h2 { animation: slam .5s cubic-bezier(.3, 1.6, .5, 1); color: #ffb3b9; }
+@keyframes slam { 0% { transform: scale(1.6) rotate(-4deg); opacity: 0; } 60% { transform: scale(.95) rotate(1deg); } }

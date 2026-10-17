@@ -32,6 +32,7 @@ from urllib.parse import urlparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import assistant  # noqa: E402
+import scenes  # noqa: E402
 import eleven  # noqa: E402
 from config import DATA, ELEVEN_VOICE  # noqa: E402
 
@@ -230,11 +231,17 @@ def _profile(body):
 
 def r_start(h, user, body):
     p = _profile(body)
-    return {"system": assistant.system_prompt(p), "greeting": assistant.greeting(p)}
+    return {"system": assistant.system_prompt(p), "greeting": assistant.greeting(p),
+            "scenes": scenes.bundle(p["idioma"])}
 
 
 def r_route(h, user, body):
-    out = assistant.route(str(body.get("text", ""))[:500], _profile(body))
+    text = str(body.get("text", ""))[:500]
+    p = _profile(body)
+    event = scenes.detect(text, p["idioma"])
+    if event:
+        return {"text": None, "event": event}  # o navegador gera a fala com a nota de direção
+    out = assistant.route(text, p)
     return {"text": out[0], **out[1]} if out else {"text": None}
 
 

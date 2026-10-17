@@ -8,7 +8,7 @@
 
 import { Api, IS_TAURI } from "../core/api";
 import type { Profile } from "../core/types";
-import type { NewsItem } from "../core/api";
+import type { NewsItem, SceneBundle } from "../core/api";
 import { WebMic } from "./mic";
 
 export const WEB = !IS_TAURI && !new URLSearchParams(location.search).has("api");
@@ -18,8 +18,13 @@ export const LINKS = {
   kofi: "https://ko-fi.com/alexandrelanda",
 };
 
+export type SceneKind =
+  | "bye" | "bye_callback" | "insult" | "insult_callback" | "rival" | "rival_return"
+  | "praise" | "surprise_call" | "surprise_declined" | "hold" | "hold_back";
+
 export interface TurnResult {
   text: string;
+  event?: SceneKind;
   news?: NewsItem[];
   settings?: { voice: string };
 }
@@ -43,6 +48,16 @@ export interface Backend {
   cancelHear(): void;
   silence(p: Profile, final: boolean): Promise<string>;
   turn(text: string, p: Profile, onToken: (t: string) => void): Promise<TurnResult>;
+  /** Notas e falas de reserva das cenas, no idioma da pessoa. */
+  scenes(p: Profile): Promise<SceneBundle>;
+  /** Fala de uma cena sem fala da pessoa (ligar de volta, voltar do gelo…). */
+  sceneLine(kind: SceneKind, p: Profile): Promise<string>;
+}
+
+export function sceneFallback(b: SceneBundle | null, kind: SceneKind): string {
+  const pool = b?.fallback[kind];
+  if (Array.isArray(pool) && pool.length) return pool[Math.floor(Math.random() * pool.length)];
+  return typeof pool === "string" ? pool : "";
 }
 
 // ── desktop ───────────────────────────────────────────────────────────────────
@@ -74,6 +89,10 @@ const desktop: Backend = {
   },
   async silence(_p, final) {
     return (await Api.callSilence(final)).text;
+  },
+  scenes: () => Api.scenes(),
+  async sceneLine(kind) {
+    return (await Api.scene(kind)).text;
   },
   async turn(text, _p, onToken) {
     let out: TurnResult = { text: "" };
@@ -112,6 +131,7 @@ let model = "";
 let system = "";
 let history: { role: string; content: string }[] = [];
 let seenSilence: string[] = []; // falas de silêncio já usadas nesta ligação
+let sceneData: SceneBundle | null = null;
 
 async function chat(messages: { role: string; content: string }[], onToken: (t: string) => void, withModel: boolean) {
   const stream = await puter().ai.chat(messages, withModel && model ? { model, stream: true } : { stream: true });
@@ -140,8 +160,9 @@ const web: Backend = {
   },
   async setProfile() {},
   async callStart(p) {
-    const r = await post<{ system: string; greeting: string }>("/api/web/start", { profile: p });
+    const r = await post<{ system: string; greeting: string; scenes: SceneBundle }>("/api/web/start", { profile: p });
     system = r.system;
+    sceneData = r.scenes;
     history = [{ role: "assistant", content: r.greeting }];
     seenSilence = [];
     return { greeting: r.greeting, voice: "" };
@@ -165,24 +186,51 @@ const web: Backend = {
     return text;
   },
   async turn(text, p, onToken) {
-    const routed = await post<{ text: string | null; news?: NewsItem[] }>("/api/web/route", { text, profile: p });
+    const routed = await post<{ text: string | null; news?: NewsItem[]; event?: SceneKind }>("/api/web/route", { text, profile: p });
     let answer: string;
     if (routed.text) {
       answer = routed.text;
       onToken(answer);
     } else {
-      const messages = [{ role: "system", content: system }, ...history.slice(-12), { role: "user", content: text }];
+      const direction = routed.event ? sceneData?.directions[routed.event] ?? "" : "";
+      const messages = [{ role: "system", content: system }, ...history.slice(-12), { role: "user", content: text + direction }];
       let got = false;
       try {
         answer = await chat(messages, (t) => ((got = true), onToken(t)), true);
       } catch (e) {
         if (got) throw e;
-        answer = await chat(messages, onToken, false); // modelo indisponível: o padrão do Puter
+        try {
+          answer = await chat(messages, onToken, false); // modelo indisponível: o padrão do Puter
+        } catch (e2) {
+          if (!routed.event) throw e2;
+          answer = sceneFallback(sceneData, routed.event);
+          onToken(answer);
+        }
       }
     }
     history.push({ role: "user", content: text }, { role: "assistant", content: answer });
     history = history.slice(-24);
-    return { text: answer, news: routed.news };
+    return { text: answer, news: routed.news, event: routed.event };
+  },
+  async scenes() {
+    return sceneData ?? { directions: {}, fallback: {} };
+  },
+  async sceneLine(kind) {
+    if (kind === "hold" || kind === "hold_back" || !sceneData?.directions[kind]) return sceneFallback(sceneData, kind);
+    const messages = [{ role: "system", content: system }, ...history.slice(-12), { role: "user", content: sceneData.directions[kind].trim() }];
+    let line = "";
+    try {
+      line = (await chat(messages, () => {}, true)).trim();
+    } catch {
+      try {
+        line = (await chat(messages, () => {}, false)).trim();
+      } catch {
+        /* reserva abaixo */
+      }
+    }
+    line ||= sceneFallback(sceneData, kind);
+    history.push({ role: "assistant", content: line });
+    return line;
   },
 };
 

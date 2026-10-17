@@ -90,6 +90,8 @@ export const Api = {
   config: (c: { voice?: string }) => call("POST", "/api/eddy/config", c),
   profile: (p: Profile) => call("POST", "/api/eddy/profile", p),
   callStart: () => call<{ text: string; voice: string }>("POST", "/api/eddy/call/start"),
+  scene: (kind: string) => call<{ text: string }>("POST", "/api/eddy/scene", { kind }),
+  scenes: () => call<SceneBundle>("GET", "/api/eddy/scenes"),
   callSilence: (final = false) => call<{ text: string }>("POST", "/api/eddy/call/silence", { final }),
   listenCancel: () => call("POST", "/api/eddy/listen/cancel"),
   listen: (maxSeconds = 15) => call<{ text: string }>("POST", "/api/eddy/listen", { max_seconds: maxSeconds }),
@@ -115,6 +117,12 @@ export const Api = {
     return res.arrayBuffer();
   },
 };
+
+/** Cenas do Eddy (core/scenes.py): notas de direção para o modelo e falas de reserva. */
+export interface SceneBundle {
+  directions: Record<string, string>;
+  fallback: Record<string, string[] | string>;
+}
 
 export interface NewsItem {
   source: string;

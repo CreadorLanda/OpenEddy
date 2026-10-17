@@ -28,6 +28,19 @@ Open Eddy is a voice AI shaped like a phone call. You sign in, tell Eddy your na
 - **Faces that stay** — the expression is driven by the same tags as the voice and holds between lines.
 - **Languages** — Portuguese (default in the app), English, Spanish.
 
+### Scenes (he takes over the call)
+
+| Scene | Trigger | What happens |
+|---|---|---|
+| **Slams the phone** | you say goodbye | arrogant goodbye → angry hang-up → **calls you back** to insult you (cartoon insults only) → hangs up again |
+| **"Bad signal"** | you insult him | “you're… break… ing up…” → glitch + static → call drops → he calls back: “I don't have bad signal, I *am* the signal” |
+| **Silent treatment** | you mention another AI | jealous meltdown → “Eddy isn't talking to you” for a few seconds → dramatic forgiveness |
+| **Ego explosion** | you praise him | fanfare + ● REC “recording this for posterity” |
+| **On hold** | sometimes, before answering | hold music while the answer is generated |
+| **Surprise call** | you idle on the home screen | Eddy calls *you*; decline and he calls back offended |
+
+Lines are generated from the conversation with a stage direction (`core/scenes.py`), with fixed lines as fallback.
+
 ## Two ways to run it
 
 | | Web ([eddy.alexandrelanda.com](https://eddy.alexandrelanda.com)) | Linux desktop |

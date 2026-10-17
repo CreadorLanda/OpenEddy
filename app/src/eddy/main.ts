@@ -5,12 +5,12 @@
 
 import "../core/theme.css";
 import "./eddy.css";
-import { Native, subscribe, type NewsItem } from "../core/api";
+import { Native, subscribe, type NewsItem, type SceneBundle } from "../core/api";
 import { h, externalLinks } from "../core/dom";
 import type { Profile } from "../core/types";
 import { EddyFace, expressionForTag, type Expression, type FaceState } from "./eddy";
 import { Ringer } from "./ring";
-import { B, LINKS } from "./backend";
+import { B, LINKS, sceneFallback, type SceneKind } from "./backend";
 import * as Puter from "./puter";
 
 const root = document.getElementById("root")!;
@@ -433,6 +433,9 @@ function profileScreen(first: boolean) {
 // ── tela inicial: ligar ───────────────────────────────────────────────────────
 
 let healthNote = "";
+let onHome = false;
+let surpriseTimer = 0;
+let surpriseDone = false;
 
 function homeScreen(note = "") {
   const face = new EddyFace();
@@ -469,6 +472,21 @@ function homeScreen(note = "") {
     ),
   );
   callBtn.focus();
+  onHome = true;
+  scheduleSurprise();
+}
+
+/** Cena "surprise": parado na tela inicial por uns minutos, o Eddy liga sozinho (uma vez por sessão). */
+function scheduleSurprise() {
+  window.clearTimeout(surpriseTimer);
+  if (surpriseDone || !profile) return;
+  surpriseTimer = window.setTimeout(() => {
+    if (!onHome || call.active || document.hidden) return scheduleSurprise();
+    surpriseDone = true;
+    incoming({ kind: "surprise_call", title: "Eddy está ligando…", fresh: true, after: "continue", onDecline: () =>
+      window.setTimeout(() => incoming({ kind: "surprise_declined", title: "Eddy está ligando… de novo", after: "hangup" }), 2500),
+    });
+  }, (150 + Math.random() * 150) * 1000);
 }
 
 // ── a ligação ─────────────────────────────────────────────────────────────────
@@ -480,14 +498,18 @@ const call = {
   started: 0,
   timer: 0,
   silences: 0,
+  turns: 0,
+  heldOnce: false,
   face: null as EddyFace | null,
   status: null as HTMLElement | null,
   you: null as HTMLElement | null,
   says: null as HTMLElement | null,
   clock: null as HTMLElement | null,
   news: null as HTMLElement | null,
+  stage: null as HTMLElement | null, // selos das cenas (REC, gelo…)
   unmute: null as (() => void) | null,
 };
+let scenes: SceneBundle | null = null;
 
 function setStatus(text: string) {
   if (call.status) call.status.textContent = text;
@@ -503,13 +525,29 @@ const mmss = (ms: number) => {
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 };
 
-async function startCall() {
+function resetCall() {
+  window.clearTimeout(surpriseTimer);
+  onHome = false;
   ensureAudio();
   stopSpeech();
   call.active = true;
   call.muted = false;
   call.silences = 0;
   call.typed = "";
+}
+
+/** Fala inteira do Eddy (cortada nas marcações), esperando terminar. */
+async function say(text: string) {
+  if (!text || !call.active) return;
+  call.says!.textContent = caption(text);
+  queueSpeech(text);
+  await speechIdle();
+}
+
+async function startCall() {
+  resetCall();
+  call.turns = 0;
+  call.heldOnce = false;
 
   // chamando…
   const face = new EddyFace();
@@ -534,6 +572,7 @@ async function startCall() {
     const [r] = await Promise.all([B.callStart(profile!), B.openMic()]);
     greeting = r.greeting;
     if (r.voice) voice = r.voice;
+    scenes = await B.scenes(profile!).catch(() => null);
     // o "alô" (cortado nas marcações) já começa a chegar enquanto ainda toca
     hello = splitAtTags(voiceText(greeting)).map((text) => ({ text, res: B.tts(text, voice, lang()).catch(() => null) }));
     await Promise.all([hello[0]?.res, sleep(Math.max(0, 3300 - (performance.now() - t0)))]);
@@ -556,6 +595,89 @@ async function startCall() {
   void loop();
 }
 
+interface IncomingOptions {
+  kind: SceneKind;
+  title: string;
+  /** "hangup" = fala e desliga com raiva; "continue" = vira uma ligação normal */
+  after: "hangup" | "continue";
+  /** ligação nova (zera a conversa); senão continua a conversa anterior */
+  fresh?: boolean;
+  onDecline?: () => void;
+}
+
+/** O Eddy ligando para a pessoa: tela de chamada recebida com atender / recusar. */
+function incoming(o: IncomingOptions) {
+  window.clearTimeout(surpriseTimer);
+  onHome = false;
+  ensureAudio();
+  const face = new EddyFace();
+  face.state = "idle";
+  face.expression = o.kind === "surprise_call" ? "proud" : "angry";
+  // a fala já vai sendo preparada enquanto toca
+  const line = (async () => {
+    if (o.fresh) {
+      await B.callStart(profile!);
+      scenes = await B.scenes(profile!).catch(() => null);
+    }
+    return B.sceneLine(o.kind, profile!).catch(() => sceneFallback(scenes, o.kind));
+  })();
+  let answered = false;
+  const decline = () => {
+    if (answered) return;
+    answered = true;
+    window.clearTimeout(missed);
+    ringer?.stop();
+    ringer?.beep(false);
+    stopFace?.();
+    show(h("section", { class: "screen center ended" }, h("h2", {}, "Chamada recusada"), h("p", { class: "muted" }, "Ele vai lembrar disso.")));
+    window.setTimeout(() => (o.onDecline ? o.onDecline() : homeScreen()), 1800);
+  };
+  const answer = async () => {
+    if (answered) return;
+    answered = true;
+    window.clearTimeout(missed);
+    ringer?.stop();
+    ringer?.beep(true);
+    resetCall();
+    if (o.fresh) {
+      call.turns = 0;
+      call.heldOnce = false;
+    }
+    try {
+      await B.openMic();
+    } catch {
+      /* sem microfone: ele fala mesmo assim */
+    }
+    inCallScreen();
+    if (call.face) call.face.expression = face.expression;
+    setFace("think", "Conectando…");
+    await say(await line);
+    if (!call.active) return;
+    if (o.after === "hangup")
+      hangUp({ title: o.kind === "surprise_declined" ? "O Eddy desligou. Ofendidíssimo." : "O Eddy desligou na sua cara. De novo.", slam: true });
+    else void loop();
+  };
+  show(
+    h(
+      "section",
+      { class: "screen ringing incoming" },
+      h("div", { class: "avatar pulse" }, faceCanvas(face, "avatar-face")),
+      h("h2", {}, "Eddy"),
+      h("p", { class: "muted" }, o.title),
+      h(
+        "div",
+        { class: "answer-row" },
+        h("button", { class: "hangup", title: "Recusar", html: PHONE, onclick: decline }),
+        h("button", { class: "call-btn ringing-btn", title: "Atender", html: PHONE, onclick: () => void answer() }),
+      ),
+      h("div", { class: "answer-labels" }, h("span", {}, "Recusar"), h("span", {}, "Atender")),
+    ),
+  );
+  ringer?.start();
+  // ninguém atendeu em 25 s: chamada perdida
+  const missed = window.setTimeout(decline, 25_000);
+}
+
 function inCallScreen() {
   call.face = new EddyFace();
   call.face.state = "idle";
@@ -564,6 +686,7 @@ function inCallScreen() {
   call.says = h("p", { class: "says" });
   call.clock = h("span", { class: "clock" }, "00:00");
   call.news = h("aside", { class: "news" });
+  call.stage = h("div", { class: "stage" });
   call.started = Date.now();
   window.clearInterval(call.timer);
   call.timer = window.setInterval(() => call.clock && (call.clock.textContent = mmss(Date.now() - call.started)), 1000);
@@ -605,6 +728,7 @@ function inCallScreen() {
       { class: "screen incall" },
       faceEl,
       h("header", { class: "top" }, h("span", { class: "live" }), h("b", {}, "Eddy"), call.clock),
+      call.stage,
       h("div", { class: "captions" }, call.you, call.says, call.status),
       typeBox,
       h("div", { class: "controls" }, muteBtn, h("button", { class: "hangup", title: "Desligar", html: PHONE, onclick: () => hangUp() }), keysBtn),
@@ -643,61 +767,153 @@ async function loop() {
         call.silences++;
         if (call.silences === 2 || call.silences === 4) {
           const line = await B.silence(profile!, false);
-          if (!call.active) break;
-          call.says!.textContent = caption(line);
-          queueSpeech(line);
-          await speechIdle();
+          await say(line);
         }
         if (call.silences >= 6) {
-          const bye = await B.silence(profile!, true);
-          if (!call.active) break;
-          call.says!.textContent = caption(bye);
-          queueSpeech(bye);
-          await speechIdle();
-          hangUp();
+          await say(await B.silence(profile!, true));
+          hangUp({ slam: true, title: "O Eddy desligou. Você demorou demais." });
         }
         continue;
       }
     }
     call.silences = 0;
-    await ask(text);
+    const event = await ask(text);
+    if (event && call.active) await runScene(event);
   }
 }
 
-async function ask(text: string) {
+/** Mostra um selo no palco da ligação (REC, gelo…) por um tempo. */
+function badge(text: string, cls: string, ms: number) {
+  if (!call.stage) return;
+  const el = h("div", { class: `badge ${cls}` }, text);
+  call.stage.append(el);
+  window.setTimeout(() => el.remove(), ms);
+}
+
+/** Depois da fala da pessoa disparar uma cena, o Eddy encena o resto. */
+async function runScene(kind: SceneKind) {
+  switch (kind) {
+    case "bye":
+      if (call.face) call.face.expression = "angry";
+      await sleep(350);
+      hangUp({
+        slam: true,
+        title: "O Eddy desligou na sua cara.",
+        then: () => window.setTimeout(() => incoming({ kind: "bye_callback", title: "Eddy está ligando… de novo", after: "hangup" }), 2200),
+      });
+      return;
+    case "insult":
+      call.face?.glitch(2.6);
+      ringer?.staticBurst(1800);
+      setStatus("Sinal… fra… co…");
+      await sleep(1900);
+      hangUp({
+        title: "Ligação perdida",
+        quiet: true,
+        then: () => window.setTimeout(() => incoming({ kind: "insult_callback", title: "Eddy está ligando…", after: "continue" }), 1200),
+      });
+      return;
+    case "rival": {
+      if (call.face) call.face.expression = "annoyed";
+      setFace("idle", "");
+      const silent = sceneFallback(scenes, "silent" as SceneKind) || "O Eddy não está falando com você.";
+      badge(`🧊 ${silent}`, "ice", 7000);
+      await sleep(7000);
+      if (!call.active) return;
+      setFace("think", "");
+      await say(await B.sceneLine("rival_return", profile!).catch(() => sceneFallback(scenes, "rival_return")));
+      return;
+    }
+    case "praise":
+      ringer?.fanfare();
+      badge("● REC — gravando para a posteridade", "rec", 4500);
+      if (call.face) call.face.expression = "proud";
+      await sleep(1200);
+      return;
+    default:
+      return;
+  }
+}
+
+/** Cena "hold": às vezes (depois de umas perguntas) ele põe na espera antes de responder. */
+function shouldHold() {
+  return call.turns >= 3 && !call.heldOnce && Math.random() < 0.13;
+}
+
+async function ask(text: string): Promise<SceneKind | undefined> {
+  call.turns++;
   call.you!.textContent = text;
   call.says!.textContent = "";
   setFace("think", "Pensando… (ele finge que é difícil)");
   let pending = "";
   let full = "";
+  // em espera, as frases da resposta ficam guardadas até a musiquinha acabar
+  let holding = false;
+  const deferred: string[] = [];
+  const speak = (s: string) => (holding ? deferred.push(s) : queueSpeech(s));
+  let hold: Promise<void> = Promise.resolve();
+  if (shouldHold()) {
+    call.heldOnce = true;
+    holding = true;
+    hold = (async () => {
+      await say(sceneFallback(scenes, "hold"));
+      setFace("idle", "♪ Em espera… ♪");
+      if (call.face) call.face.expression = "smug";
+      ringer?.holdMusic(true);
+      await sleep(5500);
+      ringer?.holdMusic(false);
+      if (!call.active) return;
+      call.says!.textContent = "";
+      queueSpeech(sceneFallback(scenes, "hold_back"));
+      holding = false;
+      for (const s of deferred.splice(0)) queueSpeech(s);
+    })();
+  }
   try {
     const out = await B.turn(text, profile!, (tok) => {
       if (!call.active) return;
       full += tok;
       pending += tok;
-      call.says!.textContent = caption(full);
+      if (!holding) call.says!.textContent = caption(full);
       const m = pending.match(/^([\s\S]*?[.!?…])(\s+)([\s\S]*)$/);
       if (m && m[1].length > 12) {
-        queueSpeech(m[1]);
+        speak(m[1]);
         pending = m[3];
       }
     });
-    if (call.active && pending.trim()) queueSpeech(pending);
+    if (call.active && pending.trim()) speak(pending);
+    await hold;
+    if (call.active) call.says!.textContent = caption(full);
     if (out.news) renderNews(out.news);
     if (out.settings) voice = out.settings.voice;
     await speechIdle();
+    return out.event;
   } catch (e) {
+    ringer?.holdMusic(false);
     setFace("error", "Erro: " + (e as Error).message);
     await sleep(2500);
+    return undefined;
   }
 }
 
-function hangUp() {
+interface HangUpOptions {
+  title?: string;
+  /** desligou com raiva: pancada no telefone */
+  slam?: boolean;
+  /** caiu a ligação: sem bipe */
+  quiet?: boolean;
+  /** o que vem depois da tela de encerrada (padrão: tela inicial) */
+  then?: () => void;
+}
+
+function hangUp(o: HangUpOptions = {}) {
   if (!call.active) return;
   call.active = false;
   stopSpeech();
   ringer?.stop();
-  ringer?.beep(false);
+  ringer?.holdMusic(false);
+  if (o.slam) ringer?.slam();
+  else if (!o.quiet) ringer?.beep(false);
   B.cancelHear();
   B.closeMic();
   call.unmute?.();
@@ -706,8 +922,8 @@ function hangUp() {
   call.started = 0;
   call.face = null;
   stopFace?.();
-  show(h("section", { class: "screen center ended" }, h("h2", {}, "Chamada encerrada"), dur ? h("p", { class: "muted" }, dur) : null));
-  setTimeout(() => !call.active && homeScreen(), 1600);
+  show(h("section", { class: `screen center ended ${o.slam ? "slammed" : ""}` }, h("h2", {}, o.title ?? "Chamada encerrada"), dur ? h("p", { class: "muted" }, dur) : null));
+  setTimeout(() => !call.active && (o.then ? o.then() : homeScreen()), 1600);
 }
 
 function renderNews(items: NewsItem[]) {
