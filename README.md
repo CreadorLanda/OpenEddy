@@ -77,7 +77,7 @@ Without an ElevenLabs key the app runs fully offline (Whisper + Kokoro). `npm ru
 
 ## Self-hosting the web version
 
-`core/webapp.py` is a stdlib-only server (no numpy, no models): it serves `app/dist`, the landing page, and the ElevenLabs proxy. Every `/api` call needs the visitor's Puter token (checked against `api.puter.com/whoami`); voice and mic have daily limits.
+`core/webapp.py` is a stdlib-only server (no numpy, no models): it serves `app/dist`, the landing page, and the ElevenLabs proxy. Every `/api` call needs the visitor's Puter token (checked against `api.puter.com/whoami`); voice and mic have daily limits, and the shortcuts have per-user rate limits and a server-wide concurrency cap.
 
 ```bash
 cd app && npm install && npm run build && cd ..
@@ -91,6 +91,13 @@ ELEVENLABS_API_KEY=... EDDY_WEB_HOST=0.0.0.0 EDDY_WEB_PORT=8120 python3 core/web
 | `EDDY_TTS_CHARS_PER_USER` / `EDDY_TTS_CHARS_TOTAL` | `8000` / `60000` | daily voice budget (after that, the browser's own voice takes over) |
 | `EDDY_UNLIMITED_USERS` | — | Puter usernames with no limit (e.g. the server owner) |
 | `EDDY_STT_PER_USER` | `150` | daily mic sessions per user |
+| `EDDY_START_BURST` / `EDDY_START_REFILL` | `10` / `0.2` | per-user bucket for `/api/web/start`: requests kept, and requests per second |
+| `EDDY_ROUTE_BURST` / `EDDY_ROUTE_REFILL` | `20` / `0.5` | the same for `/api/web/route`, the one that reads the news |
+| `EDDY_SILENCE_BURST` / `EDDY_SILENCE_REFILL` | `30` / `1` | the same for `/api/web/silence` |
+| `EDDY_ROUTE_MAX` | `8` | shortcuts answered at the same time, server-wide; the next one gets a 503 |
+| `EDDY_PUTER_MAX` | `16` | token checks at the same time, so a flood of made-up tokens cannot pin a thread each |
+
+Past a bucket the answer is a 429 with a `Retry-After`; past the concurrency limit, a 503. Both speak the same `{"error": "..."}` as the rest of the API. The buckets live in memory: restarting the server clears them, which is what you want from a limit meant to stop a flood rather than to bill anyone.
 
 Put it behind HTTPS (the browser only gives the microphone to secure pages). `deploy/` has the systemd unit and Caddy block used for alexandrelanda.com.
 

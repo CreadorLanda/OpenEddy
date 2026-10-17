@@ -10,19 +10,25 @@ import contextlib
 import json
 import os
 import shutil
+import socket
 import tempfile
 import threading
 import unittest
 import urllib.error
 import urllib.request
+from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from unittest import mock
 
 import eleven
+import limits
 import webapp
 
 TOKEN_OK = "token-do-utilizador"
 USER = "zeca"
+# A função de verdade: o setUp troca `webapp.puter_user` por uma duble, e o
+# semáforo da Puter vive dentro dela.
+PUTER_USER_REAL = webapp.puter_user
 
 
 def http(base, method, path, body=None, token=TOKEN_OK):
@@ -63,6 +69,8 @@ class WebServerTest(unittest.TestCase):
             mock.patch.object(webapp, "ROOT", self.root),
             mock.patch.object(webapp, "USAGE_FILE", os.path.join(self.usage_dir, "web-usage.json")),
             mock.patch.object(webapp, "UNLIMITED", set()),
+            mock.patch.object(webapp, "LIMITES", webapp._limites()),
+            mock.patch.object(webapp, "LUGARES_PUTER", limits.Semaforo(webapp.PUTER_MAX)),
             mock.patch.object(webapp.usage, "data", {"day": _hoje(), "users": {}, "tts_total": 0}),
             mock.patch.object(webapp, "puter_user", lambda t: USER if t == TOKEN_OK else None),
             mock.patch.object(eleven, "eleven_key", return_value=None),
@@ -218,6 +226,333 @@ class SilenceTest(WebServerTest):
     def test_too_many_seen_lines_do_not_break_it(self):
         _, body, _ = self.post("/api/web/silence", {"profile": {}, "seen": ["x"] * 500})
         self.assertTrue(body["text"])
+
+
+class SemaforoQueAvisa(limits.Semaforo):
+    """Um semáforo que diz quando largou um lugar. O `finally` do servidor
+    corre depois de a resposta chegar, e sem este sinal o teste afirma uma
+    coisa antes de ela acontecer — uma falha que só aparece de vez em quando."""
+
+    def __init__(self, n, largado):
+        super().__init__(n)
+        self.largado = largado
+
+    def largar(self):
+        super().largar()
+        self.largado.set()
+
+
+class LimitesTest(WebServerTest):
+    """Balde de fichas por pessoa e semáforo por operação cara (Issue #6).
+
+    Os números são escolhidos por aqui para cada teste; o que está em produção
+    vive em `_limites()` e é verificado em `test_os_limites_padrao_...`.
+    """
+
+    def com_limites(self, start=(2, 0.0), rota=(20, 0.0), silencio=(30, 0.0), lugares=8,
+                    semaforo=None):
+        return mock.patch.object(webapp, "LIMITES", {
+            "/api/web/start": (limits.RateLimit(*start), None),
+            "/api/web/route": (limits.RateLimit(*rota), semaforo or limits.Semaforo(lugares)),
+            "/api/web/silence": (limits.RateLimit(*silencio), None),
+        })
+
+    def semaforo_que_avisa(self, lugares):
+        largado = threading.Event()
+        self.addCleanup(largado.wait, 5)  # a thread do servidor não fica presa à espera
+        return SemaforoQueAvisa(lugares, largado), largado
+
+    def com_duas_pessoas(self):
+        return mock.patch.object(webapp, "puter_user",
+                                 lambda t: {"token-zeca": "zeca", "token-bruno": "bruno"}.get(t))
+
+    def atalho_bloqueado(self):
+        """Um `headlines` que não volta até o teste mandar: assim há pedidos
+        realmente a decorrer ao mesmo tempo, sem `sleep` a fingir que há."""
+        largar = threading.Event()
+        self.addCleanup(largar.set)
+        chegou = threading.Condition()
+        dentro = []
+
+        def headlines(*args, **kw):
+            with chegou:
+                dentro.append(1)
+                chegou.notify_all()
+            # a espera fica fora do `with`: um Event.wait dentro de uma Condition
+            # segura a fechadura dela e o próximo pedido nunca mais chega aqui
+            largar.wait(5)
+            return [{"source": "G1", "title": f"Notícia {len(dentro)}", "link": "u"}]
+
+        return mock.patch.object(webapp.assistant.web, "headlines", headlines), chegou, dentro, largar
+
+    # ── fichas por pessoa ─────────────────────────────────────────────────────
+
+    def test_uma_enxurrada_de_respostas_e_recusada(self):
+        with self.com_limites(start=(2, 0.0)):
+            self.assertEqual(self.post("/api/web/start", {})[0], 200)
+            self.assertEqual(self.post("/api/web/start", {})[0], 200)
+            status, body, headers = self.post("/api/web/start", {})
+        self.assertEqual(status, 429)
+        self.assertIn("depressa demais", body["error"])
+        self.assertGreaterEqual(int(headers["Retry-After"]), 1)
+
+    def test_o_balde_do_silencio_nao_comeca_o_da_resposta(self):
+        with self.com_limites(start=(1, 0.0), silencio=(1, 0.0)):
+            self.assertEqual(self.post("/api/web/silence", {})[0], 200)
+            self.assertEqual(self.post("/api/web/silence", {})[0], 429)
+            self.assertEqual(self.post("/api/web/start", {})[0], 200, "o silêncio não gasta a resposta")
+
+    def test_o_balde_e_por_pessoa(self):
+        with self.com_limites(start=(1, 0.0)), self.com_duas_pessoas():
+            self.assertEqual(self.post("/api/web/start", {}, token="token-zeca")[0], 200)
+            self.assertEqual(self.post("/api/web/start", {}, token="token-zeca")[0], 429)
+            self.assertEqual(self.post("/api/web/start", {}, token="token-bruno")[0], 200,
+                             "o bruno não entra na conta do zeca")
+
+    def test_um_token_inventado_da_401_e_nao_gasta_o_balde_de_ninguem(self):
+        with self.com_limites(start=(1, 0.0)):
+            self.assertEqual(self.post("/api/web/start", {}, token="inventado")[0], 401)
+            self.assertEqual(self.post("/api/web/start", {})[0], 200)
+
+    def test_uma_chamada_a_serio_passa_nos_limites_de_producao(self):
+        """Uma chamada a sério: começa, ouve duas vezes sem palavras, ouve uma
+        terceira, e o fim chama o silêncio. Com os números que vão para produção
+        (`_limites()`), nada disto bate num limite."""
+        perfil = {"nome": "Zeca", "idade": 30}
+        with mock.patch.object(webapp, "LIMITES", webapp._limites()):
+            self.assertEqual(self.post("/api/web/start", {"profile": perfil})[0], 200)
+            for _ in range(2):
+                self.assertEqual(self.post("/api/web/silence", {"profile": perfil, "seen": []})[0], 200)
+            self.assertEqual(self.post("/api/web/route", {"text": "que horas são", "profile": perfil})[0], 200)
+            self.assertEqual(self.post("/api/web/silence", {"profile": perfil, "final": True})[0], 200)
+
+    def test_os_limites_padrao_cobrem_as_tres_rotas_e_so_elas(self):
+        padrao = webapp._limites()
+        self.assertEqual(set(padrao), {"/api/web/start", "/api/web/route", "/api/web/silence"})
+        self.assertIsNone(padrao["/api/web/start"][1], "a resposta não sai para fora")
+        self.assertIsNone(padrao["/api/web/silence"][1], "o silêncio não sai para fora")
+        self.assertEqual(padrao["/api/web/route"][1].n, webapp.ROUTE_MAX)
+        for balde, _ in padrao.values():
+            self.assertGreater(balde.capacidade, 0)
+            self.assertGreater(balde.por_segundo, 0)
+
+    def test_a_voz_e_o_microfone_ficam_so_ao_orcamento_diario(self):
+        """`/api/web/tts` e `/api/web/stt-token` já têm o orçamento de `Usage`
+        (caracteres por pessoa e do servidor, sessões de microfone). Um balde
+        por cima seriam duas portas para o mesmo dinheiro — e o 429 do balde
+        desligaria a voz do browser, que é o que o 429 do orçamento já faz."""
+        self.assertNotIn("/api/web/tts", webapp.LIMITES)
+        self.assertNotIn("/api/web/stt-token", webapp.LIMITES)
+
+    def test_um_pedido_recusado_nao_parte_a_ligacao_seguinte(self):
+        """O corpo do pedido é lido antes do limite de propósito: responder sem
+        o ler deixaria o resto do pedido na ligação e o pedido seguinte na mesma
+        ligação leria lixo."""
+        with self.com_limites(start=(0, 0.0)):
+            ligacao = HTTPConnection(*self.srv.server_address, timeout=10)
+            self.addCleanup(ligacao.close)
+            headers = {"Authorization": f"Bearer {TOKEN_OK}", "Content-Type": "application/json"}
+            ligacao.request("POST", "/api/web/start",
+                            body=json.dumps({"profile": {"nome": "Zeca"}}).encode(), headers=headers)
+            primeira = ligacao.getresponse()
+            self.assertEqual(primeira.status, 429)
+            primeira.read()
+            ligacao.request("POST", "/api/web/silence", body=json.dumps({"profile": {}}).encode(),
+                            headers=headers)
+            segunda = ligacao.getresponse()
+            self.assertEqual(segunda.status, 200)
+            self.assertTrue(json.loads(segunda.read())["text"])
+
+    # ── concorrência ──────────────────────────────────────────────────────────
+
+    def test_o_atalho_caro_nao_corre_de_perto(self):
+        atalho, chegou, dentro, largar = self.atalho_bloqueado()
+        respostas = {}
+        pendentes = []
+        with self.com_limites(rota=(20, 0.0), lugares=2), atalho:
+            try:
+                pendentes = [threading.Thread(target=lambda i=i: respostas.__setitem__(
+                    i, self.post("/api/web/route", {"text": "notícias"})[0])) for i in range(2)]
+                for t in pendentes:
+                    t.start()
+                with chegou:
+                    self.assertTrue(chegou.wait_for(lambda: len(dentro) == 2, 5),
+                                    f"os dois atalhos tinham de ficar a aguardar, chegou {len(dentro)}")
+                status, body, headers = self.post("/api/web/route", {"text": "notícias"})
+            finally:
+                # antes de sair do `with`: com a duble retirada, um atalho ainda
+                # à espera ia mesmo buscar notícias aos jornais
+                largar.set()
+                for t in pendentes:
+                    t.join(10)
+        self.assertEqual(status, 503, "sem lugares: o terceiro é recusado, não posto em fila")
+        self.assertIn("atender toda a gente", body["error"])
+        self.assertGreaterEqual(int(headers["Retry-After"]), 1)
+        self.assertEqual(sorted(respostas.values()), [200, 200], "os dois que estavam dentro passaram")
+
+    def test_o_lugar_volta_assim_que_o_atalho_termina(self):
+        semaforo, largado = self.semaforo_que_avisa(1)
+        with self.com_limites(rota=(20, 0.0), semaforo=semaforo), \
+                mock.patch.object(webapp.assistant.web, "headlines", return_value=[]):
+            self.assertEqual(self.post("/api/web/route", {"text": "notícias"})[0], 200)
+            self.assertTrue(largado.wait(5), "depois de responder, o lugar tem de ser largado")
+            self.assertEqual(semaforo.livres(), 1)
+            self.assertEqual(self.post("/api/web/route", {"text": "que horas são"})[0], 200)
+
+    def test_o_lugar_volta_mesmo_quando_o_atalho_falha(self):
+        semaforo, largado = self.semaforo_que_avisa(1)
+        with self.com_limites(rota=(20, 0.0), semaforo=semaforo), \
+                mock.patch.object(webapp.assistant.web, "headlines",
+                                  side_effect=RuntimeError("a news caiu")):
+            self.assertEqual(self.post("/api/web/route", {"text": "notícias"})[0], 500)
+            self.assertTrue(largado.wait(5), "o `finally` tem de largar o lugar mesmo com a rota em baixo")
+            self.assertEqual(semaforo.livres(), 1)
+        self.assertEqual(self.post("/api/web/route", {"text": "que horas são"})[0], 200)
+
+    def test_a_mesa_cheia_diz_quanto_tem_de_esperar_e_nao_um_segundo(self):
+        """O `Retry-After` tem de ser a espera que a pessoa vai encontrar. Com a
+        mesa cheia o espaço só abre quando uma chave parada é descartada, e isso
+        não é ao segundo seguinte: mandar a pessoa voltar já era dar uma resposta
+        que não serve para nada."""
+        with mock.patch.object(limits, "MAX_CHAVES", 1), \
+                self.com_limites(start=(5, 1.0)), self.com_duas_pessoas():
+            self.assertEqual(self.post("/api/web/start", {}, token="token-zeca")[0], 200)
+            status, body, headers = self.post("/api/web/start", {}, token="token-bruno")
+        self.assertEqual(status, 429, "a mesa tem uma cadeira e o zeca sentou-se nela")
+        # o valor é o tecto, a menos dos microssegundos que o pedido demorou
+        self.assertLessEqual(abs(int(headers["Retry-After"]) - int(limits.DESCARTE_SEG) - 1), 1)
+        self.assertGreater(int(headers["Retry-After"]), 1)
+
+    def test_um_pedido_recusado_pelo_balde_nao_prende_lugar(self):
+        with self.com_limites(rota=(0, 0.0), lugares=2):
+            self.assertEqual(self.post("/api/web/route", {"text": "que horas são"})[0], 429)
+            self.assertEqual(webapp.LIMITES["/api/web/route"][1].livres(), 2,
+                             "recusar por balde não pode custar um lugar de execução")
+
+    # ── lá fora ───────────────────────────────────────────────────────────────
+
+    def test_um_servico_de_fora_que_demorou_demais_e_504(self):
+        with mock.patch.object(webapp.assistant.web, "weather",
+                               side_effect=TimeoutError("passou do tempo")):
+            status, body, _ = self.post("/api/web/route", {"text": "clima"})
+        self.assertEqual(status, 504)
+        self.assertIn("demorou demais", body["error"])
+
+    def test_um_timeout_vencido_pelo_urlopen_e_504(self):
+        """O `urlopen` embrulha o timeout num `URLError` em vez de o atirar
+        cru. É o mesmo "não respondeu a tempo" e tem de dar o mesmo 504 — com a
+        mensagem curta, sem o URL do serviço do dono do servidor e sem traceback
+        nenhum na cara de quem pediu."""
+        erro = urllib.error.URLError(socket.timeout("timed out"))
+        with mock.patch.object(webapp.assistant.web, "weather", side_effect=erro), \
+                mock.patch.object(webapp.traceback, "print_exc") as log:
+            status, body, _ = self.post("/api/web/route", {"text": "clima"})
+        self.assertEqual(status, 504)
+        self.assertEqual(list(body), ["error"])
+        self.assertIn("demorou demais", body["error"])
+        self.assertNotIn("open-meteo", body["error"], "o URL do serviço não sai para o browser")
+        log.assert_not_called()
+
+    def test_um_timeout_cru_tambem_nao_deixa_traceback(self):
+        with mock.patch.object(webapp.assistant.web, "weather", side_effect=TimeoutError()), \
+                mock.patch.object(webapp.traceback, "print_exc") as log:
+            status, body, _ = self.post("/api/web/route", {"text": "clima"})
+        self.assertEqual(status, 504)
+        self.assertIn("demorou demais", body["error"])
+        log.assert_not_called()
+
+    def test_uma_rede_quebrada_nao_vira_504(self):
+        """Só o tempo esgotado é 504. Uma DNS que não resolve, ou alguém que
+        devolveu 500, continuam a ser 500 — dizer "tenta outra vez" a quem tem
+        de esperar por outra coisa seria mentira."""
+        for erro in (urllib.error.URLError("nome não resolvido"),
+                     urllib.error.HTTPError("https://api.exemplo.pt", 500, "caiu", {}, None),
+                     urllib.error.URLError(ConnectionResetError("resetado"))):
+            with self.subTest(erro=type(erro).__name__):
+                with mock.patch.object(webapp.assistant.web, "weather", side_effect=erro):
+                    status, _, _ = self.post("/api/web/route", {"text": "clima"})
+                self.assertEqual(status, 500)
+
+    def test_o_504_tem_o_mesmo_jeito_aconteça_como_o_timeout(self):
+        """As duas maneiras de o exterior passar do tempo têm de dar
+        exatamente a mesma resposta."""
+        respostas = []
+        for erro in (TimeoutError("passou do tempo"),
+                     urllib.error.URLError(socket.timeout("timed out"))):
+            with mock.patch.object(webapp.assistant.web, "weather", side_effect=erro):
+                respostas.append(self.post("/api/web/route", {"text": "clima"})[:2])
+        self.assertEqual(respostas[0], respostas[1])
+
+    def test_o_504_nao_parte_o_servidor(self):
+        with mock.patch.object(webapp.assistant.web, "weather", side_effect=TimeoutError("caiu")):
+            self.post("/api/web/route", {"text": "clima"})
+        self.assertEqual(self.post("/api/web/start", {"profile": {}})[0], 200)
+        self.assertEqual(self.post("/api/web/silence", {"profile": {}})[0], 200)
+
+    def test_quando_a_puter_nao_tem_lugar_o_token_da_401_sem_sair_de_casa(self):
+        with mock.patch.object(webapp, "LUGARES_PUTER", limits.Semaforo(0)), \
+                mock.patch.object(webapp, "_who", {}), \
+                mock.patch.object(urllib.request, "urlopen") as abrir:
+            self.assertIsNone(PUTER_USER_REAL("token-novo"))
+        abrir.assert_not_called()
+
+    def test_o_lugar_da_conferencia_volta_mesmo_se_a_puter_cair(self):
+        with mock.patch.object(webapp, "LUGARES_PUTER", limits.Semaforo(1)), \
+                mock.patch.object(webapp, "_who", {}), \
+                mock.patch.object(urllib.request, "urlopen", side_effect=TimeoutError("caiu")):
+            self.assertIsNone(PUTER_USER_REAL("token-novo"))
+            self.assertEqual(webapp.LUGARES_PUTER.livres(), 1)
+            self.assertIsNone(PUTER_USER_REAL("outro-token"))
+
+
+class TimeoutRealTest(WebServerTest):
+    """O timeout a sério, não uma excepção injectada: um servidor local que
+    aceita a ligação e nunca responde. O `urlopen` atira o que atiraria com um
+    jornal em baixo, e a resposta tem de ser a mesma."""
+
+    def setUp(self):
+        super().setUp()
+        self.calado = socket.socket()
+        self.calado.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.calado.bind(("127.0.0.1", 0))
+        self.calado.listen(5)
+        self.addCleanup(self.calado.close)
+        self.porta = self.calado.getsockname()[1]
+        self.ligacoes = []
+        threading.Thread(target=self._engolir, daemon=True).start()
+
+    def _engolir(self):
+        while True:
+            try:
+                ligacao, _ = self.calado.accept()
+            except OSError:
+                return
+            self.ligacoes.append(ligacao)  # fica aberta, e calada
+
+    def test_um_servico_que_nunca_responde_da_504(self):
+        def calado(url, timeout=12, **kw):
+            return urllib.request.urlopen(f"http://127.0.0.1:{self.porta}/", timeout=0.3).read()
+
+        with mock.patch.object(webapp.assistant.web, "http_get", calado), \
+                mock.patch.object(webapp.traceback, "print_exc") as log:
+            status, body, _ = self.post("/api/web/route", {"text": "clima em Luanda"})
+        self.assertEqual(status, 504)
+        self.assertIn("demorou demais", body["error"])
+        log.assert_not_called()
+        self.assertTrue(self.ligacoes, "o urlopen foi mesmo bater ao servidor calado")
+
+    def test_as_maneiras_como_o_urlopen_atira_um_timeout(self):
+        """Medido contra a rede, não de memória: um timeout de leitura vem como
+        `TimeoutError` cru, um timeout de ligação vem embrulhado num `URLError`
+        com `reason` a ser `TimeoutError`. Os dois têm de ser 504. Uma DNS que
+        não existe dá `URLError` mas com `reason` a ser `gaierror` — essa não
+        é timeout, e é um 500."""
+        self.assertTrue(webapp._passou_do_tempo(TimeoutError("timed out")))
+        self.assertTrue(webapp._passou_do_tempo(urllib.error.URLError(socket.timeout("timed out"))))
+        self.assertFalse(webapp._passou_do_tempo(urllib.error.URLError(socket.gaierror("não existe"))))
+        self.assertFalse(webapp._passou_do_tempo(urllib.error.HTTPError("u", 504, "", {}, None)))
+        self.assertFalse(webapp._passou_do_tempo(urllib.error.URLError(ConnectionResetError("reset"))))
+        self.assertFalse(webapp._passou_do_tempo(RuntimeError("qualquer outra coisa")))
 
 
 class TtsTest(WebServerTest):

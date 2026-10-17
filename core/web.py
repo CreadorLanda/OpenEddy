@@ -4,6 +4,7 @@ import datetime
 import html
 import json
 import re
+import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -15,6 +16,11 @@ FEEDS = {
     "RTP": "https://www.rtp.pt/noticias/rss",
     "BBC World": "https://feeds.bbci.co.uk/news/world/rss.xml",
 }
+
+# Notícias: um RSS responde em menos de um segundo ou não responde. O teto por
+# fonte é curto e há ainda um teto para as três em conjunto (ver `headlines`).
+FEED_TIMEOUT = 5
+HEADLINES_TIMEOUT = 12
 
 WX = {0: "céu limpo", 1: "quase limpo", 2: "parcialmente nublado", 3: "nublado",
       45: "nevoeiro", 48: "nevoeiro com geada", 51: "garoa leve",
@@ -50,9 +56,9 @@ def now_text() -> str:
 
 # ── notícias ──────────────────────────────────────────────────────────────────
 
-def _feed(name, url):
+def _feed(name, url, timeout=FEED_TIMEOUT):
     try:
-        root = ET.fromstring(http_get(url))
+        root = ET.fromstring(http_get(url, timeout))
     except Exception:
         return []
     items = []
@@ -78,12 +84,21 @@ def _feed(name, url):
     return items
 
 
-def headlines(source: str | None = None, per_feed=8):
+def headlines(source: str | None = None, per_feed=8, timeout=FEED_TIMEOUT,
+              total=HEADLINES_TIMEOUT):
+    """Lê os três RSS, um a um, com dois tetos: `timeout` por fonte e `total`
+    para as três em conjunto. Um jornal lento custa uns segundos; três em
+    fila custavam até `3 × timeout` de um pedido só, e essa espera é a que
+    prende a pessoa à frente do Eddy."""
+    fim = time.monotonic() + total
     out = []
     for name, url in FEEDS.items():
         if source and source.lower() not in name.lower():
             continue
-        out += _feed(name, url)[:per_feed]
+        resta = fim - time.monotonic()
+        if resta <= 0:
+            break
+        out += _feed(name, url, min(timeout, resta))[:per_feed]
     return out
 
 
