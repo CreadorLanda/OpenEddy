@@ -116,6 +116,31 @@ export class Ringer {
     [523, 659, 784, 1047, 784, 1047].forEach((f, i) => this.tone(f, t + i * 0.12, i > 3 ? 0.4 : 0.14, 0.07, "sawtooth"));
   }
 
+  /** Efeitos dos jogos: soco, golpe forte, defesa, carta, nocaute. */
+  sfx(kind: "hit" | "heavy" | "block" | "card" | "ko") {
+    const t = this.ctx.currentTime;
+    if (kind === "ko") {
+      [392, 330, 262, 196].forEach((f, i) => this.tone(f, t + i * 0.16, 0.22, 0.06, "square"));
+      return;
+    }
+    if (kind === "block") return this.tone(1400, t, 0.06, 0.05, "square");
+    const ms = kind === "card" ? 180 : kind === "heavy" ? 260 : 110;
+    const len = Math.floor((this.ctx.sampleRate * ms) / 1000);
+    const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, kind === "card" ? 1 : 3);
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const f = this.ctx.createBiquadFilter();
+    f.type = kind === "card" ? "highpass" : "lowpass";
+    f.frequency.value = kind === "card" ? 2500 : kind === "heavy" ? 500 : 1100;
+    const g = this.ctx.createGain();
+    g.gain.value = kind === "heavy" ? 0.5 : kind === "card" ? 0.08 : 0.3;
+    src.connect(f).connect(g).connect(this.ctx.destination);
+    src.start(t);
+    if (kind === "heavy") this.tone(70, t, 0.25, 0.25, "sine");
+  }
+
   private holdTimer = 0;
 
   /** Musiquinha de espera em loop (bem genérica, de propósito). */

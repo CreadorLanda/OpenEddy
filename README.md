@@ -28,7 +28,7 @@ Open Eddy is a voice AI shaped like a phone call. You sign in, tell Eddy your na
 - **Faces that stay** — the expression is driven by the same tags as the voice and holds between lines.
 - **Languages** — Portuguese (default in the app), English, Spanish.
 - **Shows you things** — “show me a capybara in a hat”: he searches free images (Openverse, Creative Commons, mature content filtered) and puts them on screen, with credits.
-- **Plays with you (badly for you)** — chess and checkers (Brazilian rules) on the call: “let's play chess”, or the ♞ button. Three levels, from “Easy” to “Max ego”; he trash-talks, and loses like a true sore loser.
+- **Plays with you (badly for you)** — on the call, by voice or the ♞ button: chess, checkers (Brazilian rules), a 2D fight (stick figures in his own line style, best of 3, bionic super strength) and a card duel with original cards from Eddy's world (Wi-Fi toaster, possessed printer, Supreme Eddy…). Three levels, from “Easy” to “Max ego”; he trash-talks, and loses like a true sore loser.
 - **Two looks** — the blue hologram, or the classic Eddy from the show: black lines on white. “Turn white” / “go back to the hologram”, or the ◐ button.
 
 ### Scenes (he takes over the call)

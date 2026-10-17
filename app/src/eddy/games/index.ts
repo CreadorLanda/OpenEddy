@@ -1,4 +1,7 @@
-// O tabuleiro na ligação: xadrez ou damas contra o Eddy.
+// Os jogos da ligação. Este arquivo tem o tabuleiro (xadrez e damas) e a
+// fábrica `createGame`; a luta fica em fight.ts e o duelo de cartas em duel.ts.
+//
+// Tabuleiro: xadrez ou damas contra o Eddy.
 //
 // A pessoa joga com as brancas, embaixo, e começa. Ela clica na peça e depois
 // na casa; o Eddy "pensa" (o rosto entra em think) e responde. No meio do jogo
@@ -9,21 +12,22 @@ import { Chess, type Square } from "chess.js";
 import { h } from "../../core/dom";
 import { bestMove as chessBest, material } from "./chess";
 import * as ck from "./checkers";
+import { clearBanner, endBanner, levelPicker, type GameHost, type GameKind, type GameSession, type Level, type Outcome } from "./common";
+import { DuelGame } from "./duel";
+import { FightGame } from "./fight";
 
-export type GameKind = "chess" | "checkers";
-export type Level = "easy" | "normal" | "hard";
-/** Do ponto de vista do Eddy. */
-export type Outcome = "won" | "lost" | "draw";
+export type { GameHost, GameKind, GameSession, Level, Outcome } from "./common";
 
-export interface GameHost {
-  /** O Eddy está pensando no lance (rosto em think). */
-  thinking(on: boolean): void;
-  /** Um comentário curto da lista `pool` (g_took, g_check…). */
-  comment(pool: string): void;
-  end(outcome: Outcome): void;
+type BoardKind = "chess" | "checkers";
+
+/** Abre o jogo pedido. */
+export function createGame(kind: GameKind, host: GameHost): GameSession {
+  if (kind === "fight") return new FightGame(host);
+  if (kind === "duel") return new DuelGame(host);
+  return new GameView(kind, host);
 }
 
-const LEVELS: Record<GameKind, Record<Level, { depth: number; noise: number }>> = {
+const LEVELS: Record<BoardKind, Record<Level, { depth: number; noise: number }>> = {
   chess: { easy: { depth: 1, noise: 150 }, normal: { depth: 2, noise: 30 }, hard: { depth: 4, noise: 0 } },
   checkers: { easy: { depth: 2, noise: 60 }, normal: { depth: 4, noise: 10 }, hard: { depth: 7, noise: 0 } },
 };
@@ -159,11 +163,10 @@ function checkersRules(): Rules {
   };
 }
 
-const TITLE: Record<GameKind, string> = { chess: "Xadrez", checkers: "Damas" };
-const LEVEL_LABEL: Record<Level, string> = { easy: "Fácil", normal: "Normal", hard: "Ego máximo" };
-const BIG: Record<GameKind, number> = { chess: 3, checkers: 2 }; // captura que merece comentário
+const TITLE: Record<BoardKind, string> = { chess: "Xadrez", checkers: "Damas" };
+const BIG: Record<BoardKind, number> = { chess: 3, checkers: 2 }; // captura que merece comentário
 
-export class GameView {
+export class GameView implements GameSession {
   readonly el: HTMLElement;
   private rules: Rules;
   private cells: HTMLButtonElement[] = [];
@@ -178,7 +181,7 @@ export class GameView {
   private banner: HTMLElement;
   level: Level = "normal";
 
-  constructor(readonly kind: GameKind, private host: GameHost) {
+  constructor(readonly kind: BoardKind, private host: GameHost) {
     this.rules = kind === "chess" ? chessRules() : checkersRules();
     const grid = h("div", { class: `board ${kind}` });
     for (let i = 0; i < 64; i++) {
@@ -188,15 +191,7 @@ export class GameView {
       this.cells.push(cell);
       grid.append(cell);
     }
-    const levels = h("div", { class: "segs mini" });
-    for (const l of ["easy", "normal", "hard"] as const) {
-      const b = h("button", { type: "button", class: `seg ${l === this.level ? "on" : ""}` }, LEVEL_LABEL[l]);
-      b.addEventListener("click", () => {
-        this.level = l;
-        for (const x of levels.children) x.classList.toggle("on", x === b);
-      });
-      levels.append(b);
-    }
+    const levels = levelPicker(this.level, (l) => (this.level = l));
     this.banner = h("div", { class: "game-banner" });
     this.el = h(
       "div",
@@ -288,11 +283,7 @@ export class GameView {
     if (!o) return false;
     this.done = true;
     this.render();
-    const text = { won: "O Eddy venceu. Ele nunca vai deixar você esquecer.", lost: "Você venceu! (Ele vai dizer que foi lag.)", draw: "Empate." }[o];
-    const again = h("button", { type: "button", class: "primary" }, "Revanche");
-    again.addEventListener("click", () => this.restart());
-    this.banner.replaceChildren(h("p", {}, text), again);
-    this.banner.classList.add("show", o);
+    endBanner(this.banner, o, () => this.restart());
     this.host.end(o);
     return true;
   }
@@ -306,8 +297,7 @@ export class GameView {
     this.plies = 0;
     this.quietPlies = 0;
     this.saidLosing = false;
-    this.banner.className = "game-banner";
-    this.banner.replaceChildren();
+    clearBanner(this.banner);
     this.render();
   }
 }

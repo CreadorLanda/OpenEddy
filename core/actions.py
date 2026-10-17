@@ -2,7 +2,7 @@
 
   image   "me mostra uma capivara" → busca imagens livres (Openverse) e mostra
   theme   "fica branco" / "volta pro holograma" → troca o visual do Eddy
-  game    "bora jogar xadrez" / "joga damas comigo" → abre o tabuleiro
+  game    "bora jogar xadrez" / "vamos lutar" / "é hora do duelo" → abre o jogo
 
 O núcleo só reconhece o pedido e devolve {"kind", ...}; quem executa é a tela
 (a busca de imagens sai do navegador, para cada pessoa usar a própria cota do
@@ -95,14 +95,16 @@ def theme_target(text: str, lang: str) -> str | None:
 
 # ── jogos ─────────────────────────────────────────────────────────────────────
 
-_PLAY = {
-    "pt": r"\b(jog\w*|partida|desafi\w*|bora|vamos)\b",
-    "en": r"\b(play\w*|game|match|challenge)\b",
-    "es": r"\b(jug\w*|juego|partida|desaf\w*|vamos)\b",
+_PLAY = {  # verbos de convite: "gosta de luta?" não abre jogo nenhum
+    "pt": r"\b(jog\w*|partida|desafi\w*|bora|vamos|lutar|lutemos|brigar|duelar|comigo|hora\s+do)\b",
+    "en": r"\b(play\w*|game|match|challenge|let'?s|fight\s+me|duel\s+me|time\s+to)\b",
+    "es": r"\b(jug\w*|juego|partida|desaf\w*|vamos|pelear|luchar|duelar|conmigo|hora\s+del)\b",
 }
 _GAME = {
     "chess": r"\b(xadrez|chess|ajedrez)\b",
     "checkers": r"\b(damas?|checkers|draughts)\b",
+    "duel": r"\b(duel\w*|cartas?|cards?|yu-?gi-?oh)\b",
+    "fight": r"\b(lut[ae]\w*|brig\w*|porrada|fight\w*|pele\w*|luch\w*|combate|x1)\b",
 }
 
 
@@ -135,7 +137,8 @@ def detect(text: str, lang: str) -> dict | None:
     return None
 
 
-_GAMES = {"chess": "xadrez", "checkers": "damas"}
+_GAMES = {"chess": "xadrez", "checkers": "damas", "fight": "luta (jogo de luta 2D)",
+          "duel": "duelo de cartas"}
 
 
 def note(action: dict) -> str:
@@ -155,9 +158,8 @@ def note(action: dict) -> str:
              "Comente, convencido, que fica lindo de qualquer jeito. 1 frase curta.")
     elif kind == "game":
         jogo = _GAMES.get(action.get("game"), "xadrez")
-        d = (f"A pessoa te desafiou para uma partida de {jogo}. O tabuleiro já está na tela; ela "
-             "joga com as peças brancas e começa. Aceite com arrogância e diga que vai ganhar fácil. "
-             "1 frase curta.")
+        d = (f"A pessoa te desafiou para uma partida de {jogo}. O jogo já está na tela e ela começa. "
+             "Aceite com arrogância e diga que vai ganhar fácil. 1 frase curta.")
     else:
         return ""
     return f"\n\n[NOTA DE DIREÇÃO — não leia em voz alta, só interprete: {d}]"

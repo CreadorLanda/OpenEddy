@@ -11,7 +11,7 @@ import type { Profile } from "../core/types";
 import { EddyFace, faceTheme, setFaceTheme, type FaceState, type FaceTheme } from "./eddy";
 import { Ringer } from "./ring";
 import { B, LINKS, sceneFallback, type Action, type SceneKind } from "./backend";
-import { GameView, type GameHost, type GameKind } from "./games";
+import { createGame, type GameHost, type GameKind, type GameSession } from "./games";
 import { galleryPanel, searchImages, type Pic } from "./images";
 import { memoryPanel } from "./memory";
 import { caption, readPcm, SpeechQueue, voiceText, splitAtTags } from "./speech";
@@ -444,7 +444,7 @@ const call = {
   screen: null as HTMLElement | null,
   /** painel ao lado do rosto: o tabuleiro e/ou as imagens */
   area: null as HTMLElement | null,
-  game: null as GameView | null,
+  game: null as GameSession | null,
   gallery: null as HTMLElement | null,
   /** falas curtas do Eddy que chegam sem a pessoa falar (comentários do jogo…) */
   interject: [] as string[],
@@ -656,6 +656,8 @@ function inCallScreen() {
     { class: "games-menu" },
     h("button", { type: "button", onclick: () => (gamesMenu.classList.remove("open"), openGame("chess", true)) }, "♞\uFE0E Xadrez"),
     h("button", { type: "button", onclick: () => (gamesMenu.classList.remove("open"), openGame("checkers", true)) }, "⛂\uFE0E Damas"),
+    h("button", { type: "button", onclick: () => (gamesMenu.classList.remove("open"), openGame("fight", true)) }, "👊 Luta"),
+    h("button", { type: "button", onclick: () => (gamesMenu.classList.remove("open"), openGame("duel", true)) }, "🃏 Duelo"),
   );
   const gamesBtn = h("button", { class: "round", title: "Jogar com o Eddy", html: KNIGHT, onclick: () => gamesMenu.classList.toggle("open") });
   const themeBtn = h("button", { class: "round", title: "Trocar o visual do Eddy", html: CONTRAST, onclick: () => {
@@ -730,6 +732,9 @@ const gameHost: GameHost = {
     if (speech.speaking || call.interject.length) return; // não amontoa falas
     interject(sceneFallback(scenes, pool));
   },
+  sfx(kind) {
+    ringer?.sfx(kind);
+  },
   end(o) {
     if (call.face) {
       call.face.expression = o === "won" ? "proud" : o === "lost" ? "angry" : "skeptical";
@@ -744,11 +749,13 @@ const gameHost: GameHost = {
   },
 };
 
+const START_POOL: Record<GameKind, string> = { chess: "g_start", checkers: "g_start", fight: "f_start", duel: "d_start" };
+
 function openGame(kind: GameKind, announce: boolean) {
   if (!call.area) return;
   call.game?.el.remove();
   call.game?.close();
-  const g = new GameView(kind, gameHost);
+  const g = createGame(kind, gameHost);
   call.game = g;
   g.el.querySelector(".panel-head")!.append(h("button", { type: "button", class: "ghost", title: "Sair do jogo", onclick: () => closeGame(true) }, "×"));
   call.area.prepend(g.el);
@@ -756,7 +763,7 @@ function openGame(kind: GameKind, announce: boolean) {
   // microfone pausado: ninguém fala por cima do lance, e o Scribe não fica aberto à toa
   call.setMuted(true);
   setStatus("Sua vez. Microfone pausado no jogo — toque no 🎤 para falar com ele.");
-  if (announce) interject(sceneFallback(scenes, "g_start"));
+  if (announce) interject(sceneFallback(scenes, START_POOL[kind]));
 }
 
 function closeGame(byUser: boolean) {

@@ -38,6 +38,10 @@ class DetectTest(unittest.TestCase):
         self.assertEqual(actions.detect("joga damas comigo?", "pt"), {"kind": "game", "game": "checkers"})
         self.assertEqual(actions.detect("let's play chess", "en"), {"kind": "game", "game": "chess"})
         self.assertIsNone(actions.detect("você gosta de xadrez?", "pt"))
+        self.assertEqual(actions.detect("bora lutar", "pt"), {"kind": "game", "game": "fight"})
+        self.assertEqual(actions.detect("é hora do duelo", "pt"), {"kind": "game", "game": "duel"})
+        self.assertEqual(actions.detect("let's fight", "en"), {"kind": "game", "game": "fight"})
+        self.assertIsNone(actions.detect("você gosta de luta?", "pt"))
 
     def test_theme(self):
         self.assertEqual(actions.detect("fica branco", "pt"), {"kind": "theme", "to": "classic"})
@@ -55,6 +59,8 @@ class DetectTest(unittest.TestCase):
     def test_every_action_and_game_line_has_a_fallback_in_every_language(self):
         keys = ["a_image", "a_blocked", "a_theme", "a_game", "img_none", "img_found", "g_start", "g_took",
                 "g_lost_piece", "g_check", "g_in_check", "g_taunt", "g_losing",
+                "f_start", "f_special", "f_hurt", "f_low", "f_round_won", "f_round_lost",
+                "d_start", "d_big", "d_supreme", "d_trap", "d_trapped", "d_direct", "d_ouch",
                 "game_won", "game_lost", "game_draw", "game_quit"]
         for lang in ("pt", "en", "es"):
             for k in keys:

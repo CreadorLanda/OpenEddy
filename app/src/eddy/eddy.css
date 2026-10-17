@@ -317,3 +317,78 @@ body.classic .sq.last { background-image: repeating-linear-gradient(45deg, rgba(
 body.classic .gallery .searching { color: #333; }
 body.classic .gallery .scan { border-color: #111; background: repeating-linear-gradient(0deg, rgba(0, 0, 0, .06) 0 2px, transparent 2px 9px); }
 body.classic .gallery .scan .beam { background: linear-gradient(to bottom, transparent, rgba(0, 0, 0, .25), transparent); }
+
+/* ── luta ── */
+.arena { display: block; width: 100%; aspect-ratio: 16 / 9; border: 2px solid rgba(110, 228, 255, .45); border-radius: 8px; background: rgba(4, 12, 18, .55); touch-action: none; }
+.pads { display: flex; justify-content: space-between; gap: 10px; margin-top: 8px; }
+.pad-group { display: flex; gap: 6px; }
+.pad { padding: 7px 11px; font-size: 13px; user-select: none; touch-action: none; min-width: 42px; }
+.pad.on { background: #12364a; border-color: #6ee4ff; }
+.keys-hint { margin: 6px 0 0; font-size: 11px; color: #5f8c9c; text-align: center; }
+@media (hover: none) { .keys-hint { display: none; } .pad { padding: 11px 13px; } }
+body.classic .arena { border-color: #111; background: #fff; box-shadow: 5px 5px 0 #111; }
+body.classic .pad.on { background: #111; color: #fff; }
+body.classic .keys-hint { color: #666; }
+
+/* ── duelo de cartas ── */
+.duel-table { --cw: clamp(46px, 7vh, 64px); display: flex; flex-direction: column; gap: 5px; font-size: 12px; }
+.duel-table.waiting .duel-hand { opacity: .55; }
+.duel-info { display: flex; align-items: center; gap: 10px; color: #cfefff; }
+.duel-info .lp { font-weight: 700; font-variant-numeric: tabular-nums; color: #6ee4ff; }
+.duel-info .lp.low { color: #ff8a95; }
+.duel-info .backs { display: flex; gap: 2px; }
+.duel-info .backs i { width: 9px; height: 13px; border-radius: 2px; border: 1px solid #6ee4ff; background: repeating-linear-gradient(45deg, rgba(110, 228, 255, .35) 0 2px, transparent 2px 4px); }
+.duel-info .turn-dot { margin-left: auto; color: #f5d742; font-weight: 600; }
+.duel-row { display: flex; justify-content: center; gap: 6px; }
+.duel-row .slot.trap { margin: 0 0 0 4px; }
+.duel-row.p1 .slot.trap { margin: 0 4px 0 0; }
+.slot {
+  all: unset; box-sizing: border-box; width: var(--cw); height: calc(var(--cw) * 1.38); border: 1.5px dashed rgba(110, 228, 255, .28); border-radius: 7px;
+  display: grid; place-items: center; cursor: pointer; position: relative;
+}
+.slot.trap { border-style: dotted; }
+.slot.aim { border: 2px solid #f5d742; box-shadow: 0 0 14px rgba(245, 215, 66, .45); }
+.slot.picked { border: 2px solid #ef4444; }
+.slot.sel .card, .card.sel { outline: 2px solid #6ee4ff; outline-offset: 2px; }
+.slot.ready .card { box-shadow: 0 0 0 2px #22c55e, 0 0 14px rgba(34, 197, 94, .5); }
+.card {
+  width: 100%; height: 100%; box-sizing: border-box; border-radius: 6px; padding: 3px 3px 2px; display: flex; flex-direction: column; align-items: center;
+  background: linear-gradient(170deg, rgba(18, 54, 74, .95), rgba(6, 20, 28, .95)); border: 1px solid #2f6a82; color: #dff8ff; overflow: hidden; position: relative;
+}
+.card.spell { background: linear-gradient(170deg, rgba(14, 70, 60, .95), rgba(4, 24, 22, .95)); border-color: #2c8a74; }
+.card.trap { background: linear-gradient(170deg, rgba(70, 24, 52, .95), rgba(24, 6, 18, .95)); border-color: #8a2c66; }
+.card .icon { font-size: calc(var(--cw) * .38); line-height: 1.15; filter: grayscale(1) brightness(1.3) sepia(1) hue-rotate(150deg) saturate(2.4); }
+.card .name { font-size: calc(var(--cw) * .135); line-height: 1.1; text-align: center; flex: 1; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.card .stats { font-size: calc(var(--cw) * .15); font-variant-numeric: tabular-nums; color: #9fc6d4; }
+.card .stats b { color: #fff; }
+.card .stats b.up { color: #f5d742; }
+.card .lvl { position: absolute; top: 1px; right: 3px; font-size: 7px; color: #f5d742; letter-spacing: -1px; }
+.card.def { transform: rotate(90deg) scale(.72); }
+.card.spent { opacity: .55; }
+.card.back { background: repeating-linear-gradient(45deg, rgba(110, 228, 255, .22) 0 4px, rgba(6, 20, 28, .95) 4px 9px); border-color: #6ee4ff; justify-content: center; }
+.duel-mid { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 2px 0; border-top: 1px solid rgba(110, 228, 255, .15); border-bottom: 1px solid rgba(110, 228, 255, .15); }
+.duel-log { flex: 1; margin: 0; font-size: 12px; line-height: 1.3; color: #cfefff; max-height: 3.9em; overflow: hidden; }
+.duel-buttons { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.duel-buttons button { padding: 5px 10px; font-size: 12px; }
+.duel-buttons .hint { color: #9fc6d4; font-size: 11.5px; max-width: 170px; }
+.duel-hand { display: flex; gap: 5px; justify-content: center; overflow-x: auto; padding: 4px 2px 2px; }
+.duel-hand .slot { border: 0; flex: none; }
+.duel-hand .slot:hover .card { transform: translateY(-4px); }
+.duel-hand .card { transition: transform .12s; }
+body.classic .slot { border-color: rgba(0, 0, 0, .3); }
+body.classic .card { background: #fff; border: 2px solid #111; color: #111; }
+body.classic .card.spell { background: repeating-linear-gradient(0deg, #fff 0 6px, #eceae4 6px 7px); }
+body.classic .card.trap { background: repeating-linear-gradient(90deg, #fff 0 6px, #eceae4 6px 7px); }
+body.classic .card .icon { filter: grayscale(1) contrast(1.4); }
+body.classic .card .stats { color: #444; }
+body.classic .card .stats b { color: #111; }
+body.classic .card .stats b.up { color: #b3261e; }
+body.classic .card .lvl { color: #111; }
+body.classic .card.back { background: repeating-linear-gradient(45deg, #111 0 3px, #fff 3px 8px); }
+body.classic .duel-info, body.classic .duel-log { color: #111; }
+body.classic .duel-info .lp { color: #111; }
+body.classic .duel-info .lp.low { color: #b3261e; }
+body.classic .duel-info .backs i { border-color: #111; background: repeating-linear-gradient(45deg, #111 0 2px, #fff 2px 4px); }
+body.classic .duel-info .turn-dot { color: #b3261e; }
+body.classic .duel-mid { border-color: #111; }
+body.classic .duel-buttons .hint { color: #555; }

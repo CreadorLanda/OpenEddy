@@ -27,7 +27,7 @@ export type SceneKind =
 export type Action =
   | { kind: "image"; query: string; blocked?: boolean }
   | { kind: "theme"; to: "classic" | "holo" | "toggle" }
-  | { kind: "game"; game: "chess" | "checkers" };
+  | { kind: "game"; game: "chess" | "checkers" | "fight" | "duel" };
 
 export interface TurnOptions {
   /** Chamado assim que a ação é reconhecida, antes do modelo responder. */
