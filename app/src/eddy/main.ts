@@ -366,6 +366,12 @@ function homeScreen(note = "") {
 
 const call = {
   active: false,
+  /**
+   * Geração da chamada: muda ao desligar e ao ligar outra vez. `call.active` sozinho
+   * não chega — depois de uma chamada nova volta a ser true, e um turno da antiga
+   * que só agora acaba escreveria a resposta na legenda e na voz de Eddy.
+   */
+  gen: 0,
   muted: false,
   typed: "",
   started: 0,
@@ -398,6 +404,7 @@ async function startCall() {
   ensureAudio();
   speech.stop();
   call.active = true;
+  call.gen++; // a chamada nova invalida o que a anterior deixou a meio
   call.muted = false;
   call.silences = 0;
   call.typed = "";
@@ -561,11 +568,15 @@ async function ask(text: string) {
   call.you!.textContent = text;
   call.says!.textContent = "";
   setFace("think", "Pensando… (ele finge que é difícil)");
+  // A chamada a que este turno pertence. Se desligar ou ligar outra vez, o que
+  // chegar depois é de uma chamada que já não está no ecrã: não entra na legenda,
+  // não fala, não troca a voz.
+  const minha = call.gen;
   let pending = "";
   let full = "";
   try {
     const out = await B.turn(text, profile!, (tok) => {
-      if (!call.active) return;
+      if (call.gen !== minha) return;
       full += tok;
       pending += tok;
       call.says!.textContent = caption(full);
@@ -575,7 +586,8 @@ async function ask(text: string) {
         pending = m[3];
       }
     });
-    if (call.active && pending.trim()) speech.say(pending);
+    if (call.gen !== minha) return;
+    if (pending.trim()) speech.say(pending);
     if (out.news) renderNews(out.news);
     if (out.settings) voice = out.settings.voice;
     await speech.idle();
@@ -588,6 +600,7 @@ async function ask(text: string) {
 function hangUp() {
   if (!call.active) return;
   call.active = false;
+  call.gen++; // o que ainda vier desta chamada é resposta velha
   speech.stop();
   ringer?.stop();
   ringer?.beep(false);

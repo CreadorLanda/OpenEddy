@@ -5,6 +5,7 @@ conta Puter e decide como o Eddy chama a pessoa e em que língua fala. Atalhos l
 hora) respondem sem passar pelo modelo — na CPU cada resposta custa segundos.
 """
 
+import itertools
 import random
 import re
 import threading
@@ -240,7 +241,13 @@ def route(text: str, p: dict):
 
 
 class Eddy:
-    """O Eddy do app no PC: um usuário, conversa guardada aqui, cérebro no Ollama."""
+    """O Eddy do app no PC: um usuário, conversa guardada aqui, cérebro no Ollama.
+
+    `call` é a geração da chamada: cada `start_call` (ou troca de perfil) abre uma
+    nova, e o que ficou a pensar na geração anterior passa a ser resposta velha.
+    Sem isto, um turno que acaba depois da pessoa desligar escreve a resposta na
+    conversa da chamada seguinte.
+    """
 
     def __init__(self):
         self.voice = eleven.default_voice()
@@ -248,6 +255,8 @@ class Eddy:
         self.history: list[dict] = []
         self.seen: list[str] = []  # falas de silêncio já usadas nesta ligação
         self.lock = threading.Lock()
+        self._calls = itertools.count(1)  # next() não cede o meio: duas ligações não trocam a geração
+        self.call = next(self._calls)
 
     def settings(self):
         return {"voice": self.voice, "profile": self.profile}
@@ -258,6 +267,7 @@ class Eddy:
         return self.settings()
 
     def set_profile(self, data):
+        self.call = next(self._calls)  # o perfil novo zera a conversa: o que ficou a pensar é antigo
         self.profile = clean_profile(data)
         self.history = []
         return self.settings()
@@ -268,6 +278,7 @@ class Eddy:
 
     def start_call(self):
         """Nova ligação: zera a conversa, já carrega o modelo e devolve o 'alô'."""
+        self.call = next(self._calls)  # tudo o que ficou a pensar agora é resposta velha
         self.history = []
         self.seen = []
         threading.Thread(target=llm.warm_up, args=(llm.model(),), daemon=True).start()
@@ -289,18 +300,28 @@ class Eddy:
         return route(text, self.profile)
 
     def turn(self, text, on_token):
-        """Uma fala da pessoa na ligação. Devolve {text, ...extras}."""
+        """Uma fala da pessoa na ligação. Devolve {text, ...extras}.
+
+        Se a pessoa desligar (ou ligar outra vez) enquanto o Eddy pensa, o turno
+        devolve `stale` e não escreve nada: a resposta é de uma chamada que já
+        acabou, e escrevê-la contaminaria a conversa da chamada nova.
+        """
         with self.lock:
+            call = self.call  # a chamada a que este turno pertence
             routed = self._route(text)
             if routed:
                 answer, extra = routed
-                on_token(answer)
+                if self.call == call:
+                    on_token(answer)  # só anuncia se a chamada ainda for esta
             else:
                 messages = ([{"role": "system", "content": system_prompt(self.profile)}]
                             + self.history[-12:] + [{"role": "user", "content": text}])
-                answer = llm.chat(llm.model(), messages, on_token=on_token)["content"]
+                answer = llm.chat(llm.model(), messages, on_token=on_token,
+                                  should_stop=lambda: self.call != call)["content"]
                 answer = re.sub(r"(?s)<think>.*?</think>", "", answer).strip()
                 extra = {}
+            if self.call != call:
+                return {"text": "", "stale": True}
             self.history += [{"role": "user", "content": text},
                              {"role": "assistant", "content": answer}]
             self.history = self.history[-24:]

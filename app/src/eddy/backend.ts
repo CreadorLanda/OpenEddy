@@ -113,6 +113,13 @@ let model = "";
 let system = "";
 let history: { role: string; content: string }[] = [];
 let seenSilence: string[] = []; // falas de silêncio já usadas nesta ligação
+/**
+ * Geração da chamada: cada `callStart` abre uma nova. Um turno que ainda esteja
+ * a pedir voz quando isso acontece é de uma chamada que já acabou, e não escreve
+ * nada em `history`/`seenSilence` — senão a conversa nova começa a saber coisas
+ * da antiga.
+ */
+let call = 0;
 
 async function chat(messages: { role: string; content: string }[], onToken: (t: string) => void, withModel: boolean) {
   const stream = await puter().ai.chat(messages, withModel && model ? { model, stream: true } : { stream: true });
@@ -141,7 +148,9 @@ const web: Backend = {
   },
   async setProfile() {},
   async callStart(p) {
+    const minha = ++call; // a chamada nova invalida tudo o que estava a meio
     const r = await post<{ system: string; greeting: string }>("/api/web/start", { profile: p });
+    if (minha !== call) return { greeting: "", voice: "" };
     system = r.system;
     history = [{ role: "assistant", content: r.greeting }];
     seenSilence = [];
@@ -162,11 +171,13 @@ const web: Backend = {
   },
   cancelHear: () => mic.stopListening(),
   async silence(p, final) {
+    const minha = call;
     const { text } = await post<{ text: string }>("/api/web/silence", { profile: p, final, seen: seenSilence });
-    seenSilence.push(text);
+    if (minha === call) seenSilence.push(text); // uma fala de silêncio de outra chamada não conta
     return text;
   },
   async turn(text, p, onToken) {
+    const minha = call;
     const routed = await post<{ text: string | null; news?: NewsItem[] }>("/api/web/route", { text, profile: p });
     let answer: string;
     if (routed.text) {
@@ -182,8 +193,10 @@ const web: Backend = {
         answer = await chat(messages, onToken, false); // modelo indisponível: o padrão do Puter
       }
     }
-    history.push({ role: "user", content: text }, { role: "assistant", content: answer });
-    history = history.slice(-24);
+    if (minha === call) {
+      history.push({ role: "user", content: text }, { role: "assistant", content: answer });
+      history = history.slice(-24);
+    }
     return { text: answer, news: routed.news };
   },
 };

@@ -63,7 +63,7 @@ class ServerTest(unittest.TestCase):
             mock.patch.object(llm, "warm_up"),
             mock.patch.object(voice, "ready", return_value=True),
             mock.patch.object(voice, "warm_up"),
-            mock.patch.object(assistant.Eddy, "start_call", return_value="[sighs] Alô, garoto."),
+            mock.patch.object(assistant, "greeting", return_value="[sighs] Alô, garoto."),
             mock.patch.object(assistant.Eddy, "silence_line", return_value="[scoffs] Silêncio?"),
         ]
         for p in patches:
@@ -209,6 +209,26 @@ class TurnTest(ServerTest):
             _, eventos, _ = self.post_sse("/api/eddy/turn", {"text": "que dia é hoje"})
         self.assertEqual([e["type"] for e in eventos], ["token", "done"])
         self.assertIn("17 de outubro", eventos[0]["token"])
+
+    def test_a_turn_from_a_finished_call_is_never_published(self):
+        """O turno continua a pensar depois de a pessoa desligar e ligar outra vez:
+        o stream fecha sem `done`, para o cliente não pintar a resposta velha."""
+
+        def chat(*_a, **_kw):
+            self.post("/api/eddy/call/start")  # a chamada nova, a meio do turno velho
+            return {"content": "resposta velha"}
+
+        with mock.patch.object(llm, "chat", side_effect=chat):
+            _, eventos, _ = self.post_sse("/api/eddy/turn", {"text": "pergunta velha"})
+        self.assertEqual(eventos, [])
+        self.assertEqual(self.eddy.history, [])
+
+    def test_a_current_turn_still_publishes_its_answer(self):
+        with mock.patch.object(llm, "chat", return_value={"content": "resposta da chamada"}):
+            _, eventos, _ = self.post_sse("/api/eddy/turn", {"text": "pergunta"})
+        self.assertEqual([e["type"] for e in eventos], ["done"])
+        self.assertEqual(eventos[0]["text"], "resposta da chamada")
+        self.assertEqual(len(self.eddy.history), 2)
 
 
 class CallTest(ServerTest):

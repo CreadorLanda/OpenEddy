@@ -5,6 +5,7 @@ código decide sozinho — quem o Eddy chama de quê, que atalho responde sem ga
 CPU, o que fica na memória da ligação e o que um "alô" novo apaga.
 """
 
+import threading
 import unittest
 from unittest import mock
 
@@ -171,6 +172,73 @@ class EddyCallTest(unittest.TestCase):
     def test_the_thinking_block_is_never_said_out_loud(self):
         resposta, _ = self.ask(content="<think>ele está a pensar</think>[Sighs] Oi.")
         self.assertEqual(resposta["text"], "[Sighs] Oi.")
+
+    def test_a_turn_that_survives_a_new_call_does_not_write_to_the_history(self):
+        """O turno velho ainda pensa quando a pessoa desliga e liga outra vez: quando
+        ele acabar, a resposta é da chamada que já não existe."""
+        entrou = threading.Event()
+        largado = threading.Event()
+
+        def chat_lento(_model, _messages, on_token=None, **_):
+            entrou.set()
+            largado.wait(2)
+            on_token("[sighs] resposta da chamada velha")
+            return {"content": "[sighs] resposta da chamada velha"}
+
+        with mock.patch.object(llm, "chat", side_effect=chat_lento):
+            resposta = {}
+            velho = threading.Thread(target=lambda: resposta.update(self.eddy.turn("pergunta velha", lambda t: None)))
+            velho.start()
+            self.assertTrue(entrou.wait(2), "o turno velho nunca chegou ao modelo")
+            with mock.patch.object(llm, "warm_up"):
+                self.eddy.start_call()  # chamada nova: zera o historial
+            largado.set()
+            velho.join(2)
+
+        self.assertFalse(velho.is_alive())
+        self.assertEqual(self.eddy.history, [])
+        self.assertTrue(resposta.get("stale"), resposta)
+
+    def test_a_superseded_turn_stops_reading_from_the_model(self):
+        """`llm.chat` já sabia parar de ler; agora recebe o should_stop da chamada."""
+        parados = []
+        entrou = threading.Event()
+        largado = threading.Event()
+
+        def chat_lento(_model, _messages, should_stop=None, **_):
+            parados.append(should_stop)
+            entrou.set()
+            largado.wait(2)
+            return {"content": "resposta velha"}
+
+        with mock.patch.object(llm, "chat", side_effect=chat_lento):
+            velho = threading.Thread(target=lambda: self.eddy.turn("pergunta velha", lambda t: None))
+            velho.start()
+            self.assertTrue(entrou.wait(2))
+            self.assertFalse(parados[0](), "com a chamada a valer, o turno não pára")
+            with mock.patch.object(llm, "warm_up"):
+                self.eddy.start_call()
+            self.assertTrue(parados[0](), "a chamada mudou: o turno tem de se despachar")
+            largado.set()
+            velho.join(2)
+            self.assertFalse(velho.is_alive())
+
+    def test_a_new_call_only_keeps_its_own_turn(self):
+        with mock.patch.object(llm, "chat", return_value={"content": "resposta nova"}):
+            with mock.patch.object(llm, "warm_up"):
+                self.eddy.start_call()
+            self.eddy.turn("pergunta nova", lambda t: None)
+        self.assertEqual([m["content"] for m in self.eddy.history], ["pergunta nova", "resposta nova"])
+
+    def test_a_failing_model_does_not_break_the_next_turn(self):
+        with mock.patch.object(llm, "chat", side_effect=RuntimeError("ollama: modelo não encontrado")):
+            with self.assertRaises(RuntimeError):
+                self.eddy.turn("pergunta", lambda t: None)
+        # a geração tem de continuar a servir: o turno que vem a seguir é válido
+        with mock.patch.object(llm, "chat", return_value={"content": "resposta"}):
+            resposta = self.eddy.turn("outra pergunta", lambda t: None)
+        self.assertEqual(resposta["text"], "resposta")
+        self.assertEqual(len(self.eddy.history), 2)
 
     def test_a_shortcut_does_not_wake_the_model(self):
         with mock.patch.object(assistant.web, "now_text", return_value="17 de outubro"):

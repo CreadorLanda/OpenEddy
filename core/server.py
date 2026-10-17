@@ -177,6 +177,11 @@ def eddy_turn(h):
     h._sse_start()
     try:
         out = eddy.turn(text, lambda t: h._sse({"type": "token", "token": t}))
+        if out.get("stale"):
+            # A pessoa desligou (ou ligou outra vez) enquanto o Eddy pensava: a
+            # resposta é de uma chamada que já não existe. O stream fecha sem
+            # `done`, para o cliente não pintar nada na chamada nova.
+            return
         h._sse({"type": "done", **out})
     except (BrokenPipeError, ConnectionResetError):
         pass
