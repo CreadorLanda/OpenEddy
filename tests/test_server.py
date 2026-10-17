@@ -389,22 +389,57 @@ class TtsTest(ServerTest):
 
 
 class ResetRouteTest(ServerTest):
-    """`POST /api/eddy/reset` está declarada nas rotas, mas `Eddy` não tem o
-    método `reset()` que ela chama (core/server.py:209): hoje responde 500 com
-    `AttributeError`. É o defeito do issue #8, que fica fora deste PR — corrigi-lo
-    aqui seria mudar comportamento, não acrescentar testes.
+    """`POST /api/eddy/reset` limpa a conversa sem desligar: a mesma voz, o mesmo
+    perfil, e o que estava a pensar passa a ser resposta velha."""
 
-    O teste escreve o que a rota promete (200, conversa limpa) e leva
-    @expectedFailure até o issue #8 o resolver. Se a rota deixar de dar 500, o
-    teste passa sem querer, o unittest conta isso como "unexpected success" e a
-    suite fica vermelha a pedir que se tire o decorator."""
-
-    @unittest.expectedFailure
-    def test_resetting_the_call_forgets_the_conversation(self):
-        self.eddy.history.append({"role": "user", "content": "oi"})
+    def test_reset_answers_ok_and_clears_the_conversation(self):
+        self.eddy.history.extend([{"role": "user", "content": "pergunta"},
+                                  {"role": "assistant", "content": "resposta"}])
+        self.eddy.seen.append("[sighs] fala de silêncio já usada")
         status, body, _ = self.post("/api/eddy/reset")
         self.assertEqual((status, body), (200, {"ok": True}))
         self.assertEqual(self.eddy.history, [])
+        self.assertEqual(self.eddy.seen, [])
+
+    def test_reset_keeps_the_profile_and_the_voice(self):
+        self.post("/api/eddy/config", {"voice": "pm_santa"})
+        self.post("/api/eddy/reset")
+        _, body, _ = self.get("/api/meta")
+        self.assertEqual(body["eddy"]["voice"], "pm_santa")
+        self.assertEqual(body["eddy"]["profile"]["nome"], "Zeca")
+
+    def test_a_token_from_before_the_reset_never_reaches_the_client(self):
+        """O reset cai entre o `should_stop` e a emissão do token: esse token é de
+        antes do reset, por isso não sai nem volta a escrever no historial."""
+        real_chat = llm.chat
+
+        def chat_que_reseta(*args, on_token=None, should_stop=None, **kwargs):
+            def verifica_e_reseta():
+                parar = should_stop()
+                if not parar:  # só depois de decidir que continua é que a conversa é limpa
+                    self.post("/api/eddy/reset")
+                return parar
+            return real_chat(*args, on_token=on_token, should_stop=verifica_e_reseta, **kwargs)
+
+        linhas = [json.dumps({"message": {"content": parte}}).encode() + b"\n"
+                  for parte in ("[sighs] token", " anterior ao reset")]
+        with mock.patch.object(llm, "chat", side_effect=chat_que_reseta), \
+                mock.patch.object(llm.urllib.request, "urlopen", return_value=Linhas(linhas)):
+            _, eventos, _ = self.post_sse("/api/eddy/turn", {"text": "pergunta"})
+        self.assertEqual(eventos, [])
+        self.assertEqual(self.eddy.history, [])
+
+    def test_a_turn_after_the_reset_starts_from_an_empty_conversation(self):
+        self.eddy.history.extend([{"role": "user", "content": "pergunta antiga"}])
+        self.post("/api/eddy/reset")
+        with mock.patch.object(llm, "chat", return_value={"content": "resposta nova"}) as chat:
+            _, eventos, _ = self.post_sse("/api/eddy/turn", {"text": "pergunta nova"})
+        self.assertEqual([e["type"] for e in eventos], ["done"])
+        # o modelo só viu a pergunta nova: o historial antigo não veio atrás
+        mensagens = chat.call_args[0][1]
+        self.assertEqual(mensagens[-1]["content"], "pergunta nova")
+        self.assertEqual(len(mensagens), 2)
+        self.assertEqual([m["content"] for m in self.eddy.history], ["pergunta nova", "resposta nova"])
 
 
 if __name__ == "__main__":

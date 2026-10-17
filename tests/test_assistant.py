@@ -150,6 +150,24 @@ class RouteTest(unittest.TestCase):
             self.assertIsNone(assistant.route("what are the headlines", p))
 
 
+class LockQueAgeAoSerAdquirido:
+    """O lock do Eddy, mas que dispara um callback no instante em que o turno o
+    adquire. É assim que se reproduz uma troca a meio da espera — sem sleeps nem
+    threads, e sem depender da ordem em que duas threads acordam."""
+
+    def __init__(self, ao_adquirir):
+        self._interno = threading.Lock()
+        self.ao_adquirir = ao_adquirir
+
+    def __enter__(self):
+        self._interno.acquire()
+        self.ao_adquirir()
+        return self
+
+    def __exit__(self, *_):
+        self._interno.release()
+
+
 class EddyCallTest(unittest.TestCase):
     """Uma ligação: o que fica na memória e o que um "alô" novo apaga."""
 
@@ -205,33 +223,36 @@ class EddyCallTest(unittest.TestCase):
         lock encontrou."""
         trocou = threading.Event()
 
-        class LockQueTrocaDeChamada:
-            """O lock do Eddy, mas que abre uma chamada nova no instante em que o
-            turno o adquire — é a troca a meio da espera, sem sleeps nem threads."""
-
-            def __init__(self, ao_adquirir):
-                self._interno = threading.Lock()
-                self.ao_adquirir = ao_adquirir
-
-            def __enter__(self):
-                self._interno.acquire()
-                self.ao_adquirir()
-                return self
-
-            def __exit__(self, *_):
-                self._interno.release()
-
         def nova_chamada():
             if not trocou.is_set():
                 trocou.set()
                 with mock.patch.object(llm, "warm_up"):
                     self.eddy.start_call()
 
-        self.eddy.lock = LockQueTrocaDeChamada(nova_chamada)
+        self.eddy.lock = LockQueAgeAoSerAdquirido(nova_chamada)
         with mock.patch.object(llm, "chat", return_value={"content": "resposta da chamada velha"}):
             resposta = self.eddy.turn("pergunta da chamada velha", lambda t: None)
 
         self.assertTrue(trocou.is_set(), "a troca de chamada não aconteceu: o teste não provaria nada")
+        self.assertTrue(resposta.get("stale"), resposta)
+        self.assertEqual(self.eddy.history, [])
+
+    def test_a_turn_that_was_thinking_cannot_restore_the_conversation_after_a_reset(self):
+        """Limpar a conversa tem de invalidar o turno que ficou a pensar, senão ele
+        volta a escrever o que o reset acabou de apagar."""
+        limpou = threading.Event()
+
+        def limpar():
+            if not limpou.is_set():
+                limpou.set()
+                self.eddy.reset()
+
+        self.eddy.history.append({"role": "user", "content": "pergunta já apagada"})
+        self.eddy.lock = LockQueAgeAoSerAdquirido(limpar)
+        with mock.patch.object(llm, "chat", return_value={"content": "resposta do turno em curso"}):
+            resposta = self.eddy.turn("pergunta que ficou no ar", lambda t: None)
+
+        self.assertTrue(limpou.is_set(), "o reset não aconteceu: o teste não provaria nada")
         self.assertTrue(resposta.get("stale"), resposta)
         self.assertEqual(self.eddy.history, [])
 

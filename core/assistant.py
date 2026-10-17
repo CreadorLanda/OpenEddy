@@ -291,6 +291,19 @@ class Eddy:
         threading.Thread(target=llm.warm_up, args=(llm.model(),), daemon=True).start()
         return greeting(self.profile)
 
+    def reset(self):
+        """Limpa a conversa sem desligar: a mesma voz, o mesmo perfil, e o que
+        estava a pensar passa a ser resposta velha.
+
+        É o `start_call` sem o "alô" e sem acordar o modelo — o que se quer
+        quando a pessoa limpa a conversa a meio da ligação. Não espera pelo turno
+        que estiver a falar: só pelo lock curto da publicação.
+        """
+        with self.publish:
+            self.call = next(self._calls)  # limpar a conversa também invalida o que ficou no ar
+            self.history = []
+            self.seen = []
+
     def silence_line(self, final=False):
         line = silence_line(self.profile, final, self.seen)
         self.seen.append(line)
