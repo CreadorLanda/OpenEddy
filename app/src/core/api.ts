@@ -90,7 +90,7 @@ export const Api = {
   config: (c: { voice?: string }) => call("POST", "/api/eddy/config", c),
   profile: (p: Profile, owner?: string) => call("POST", "/api/eddy/profile", owner ? { ...p, owner } : p),
   callStart: () => call<{ text: string; voice: string }>("POST", "/api/eddy/call/start"),
-  scene: (kind: string) => call<{ text: string }>("POST", "/api/eddy/scene", { kind }),
+  scene: (kind: string, extra = "") => call<{ text: string }>("POST", "/api/eddy/scene", { kind, extra }),
   scenes: () => call<SceneBundle>("GET", "/api/eddy/scenes"),
   callSilence: (final = false) => call<{ text: string }>("POST", "/api/eddy/call/silence", { final }),
   listenCancel: () => call("POST", "/api/eddy/listen/cancel"),

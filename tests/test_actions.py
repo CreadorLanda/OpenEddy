@@ -105,6 +105,24 @@ class DesktopTurnTest(unittest.TestCase):
         self.assertEqual(out["action"], {"kind": "game", "game": "checkers"})
 
 
+class HungUpTest(unittest.TestCase):
+    setUp = DesktopTurnTest.setUp  # o mesmo Eddy, sem repetir os testes de lá
+
+    def test_the_callback_line_gets_what_he_was_saying(self):
+        with mock.patch.object(llm, "chat", return_value={"content": "[annoyed] Voltou?"}) as chat:
+            line = self.eddy.scene_line("hung_up_on", "Você estava dizendo: “a resposta é 42”")
+        self.assertEqual(line, "[annoyed] Voltou?")
+        content = chat.call_args[0][1][-1]["content"]
+        self.assertIn("DESLIGOU NA SUA CARA", content)
+        self.assertIn("LEMBRANÇA", content)
+        self.assertIn("a resposta é 42", content)
+
+    def test_without_the_model_there_is_still_a_complaint(self):
+        with mock.patch.object(llm, "chat", side_effect=RuntimeError("caiu")):
+            line = self.eddy.scene_line("hung_up_on", "x")
+        self.assertIn(line, scenes.FALLBACK["pt"]["hung_up_on"])
+
+
 class WebRouteActionTest(WebServerTest):
     def test_the_route_returns_the_action_the_note_and_a_fallback(self):
         _, body, _ = self.post("/api/web/route", {"text": "me mostra uma capivara", "profile": {"nome": "Zeca"}})

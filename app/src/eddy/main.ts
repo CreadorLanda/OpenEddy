@@ -485,6 +485,38 @@ function resetCall() {
   call.gallery = null;
 }
 
+// ── desligou na cara dele: lembrança para a próxima ligação ─────────────────────
+//
+// Fica no navegador (por conta Puter), vale por 12 horas e é usada uma vez só.
+
+const HUNG_UP_TTL = 12 * 3600 * 1000;
+const hungUpKey = () => `open-eddy:hung-up:${username || "anon"}`;
+
+function rememberHangUp() {
+  const said = call.says?.textContent?.trim() ?? "";
+  const asked = call.you?.textContent?.trim() ?? "";
+  try {
+    localStorage.setItem(hungUpKey(), JSON.stringify({ at: Date.now(), said: said.slice(0, 400), asked: asked.slice(0, 200) }));
+  } catch {
+    /* sem armazenamento: ele esquece, paciência */
+  }
+}
+
+/** A lembrança (se houver e for recente), já apagada: só serve para uma ligação. */
+function takeHangUp(): string | null {
+  try {
+    const raw = localStorage.getItem(hungUpKey());
+    localStorage.removeItem(hungUpKey());
+    if (!raw) return null;
+    const m = JSON.parse(raw) as { at: number; said: string; asked: string };
+    if (Date.now() - m.at > HUNG_UP_TTL) return null;
+    const ago = Math.max(1, Math.round((Date.now() - m.at) / 60000));
+    return `A pessoa desligou há ${ago} minuto(s). ${m.asked ? `A pessoa tinha perguntado: “${m.asked}”. ` : ""}${m.said ? `Você estava dizendo: “${m.said}”` : "Você estava pensando na resposta."}`;
+  } catch {
+    return null;
+  }
+}
+
 /** Fala inteira do Eddy (cortada nas marcações), esperando terminar. */
 async function say(text: string) {
   if (!text || !call.active) return;
@@ -522,6 +554,9 @@ async function startCall() {
     greeting = r.greeting;
     if (r.voice) voice = r.voice;
     scenes = await B.scenes(profile!).catch(() => null);
+    // desligaram na cara dele da última vez: o "alô" vira a bronca (e o resto da fala)
+    const memo = takeHangUp();
+    if (memo) greeting = (await B.sceneLine("hung_up_on", profile!, memo).catch(() => sceneFallback(scenes, "hung_up_on"))) || greeting;
     // o "alô" (cortado nas marcações) já começa a chegar enquanto ainda toca. Vai
     // com o sinal da sessão: se a pessoa desligar enquanto o telefone toca, o
     // pedido morre com a chamada em vez de continuar a ser sintetizado.
@@ -700,7 +735,7 @@ function inCallScreen() {
     h("div", { class: "captions" }, call.you, call.says, call.status),
     typeBox,
     gamesMenu,
-    h("div", { class: "controls" }, gamesBtn, muteBtn, h("button", { class: "hangup", title: "Desligar", html: PHONE, onclick: () => hangUp() }), keysBtn, themeBtn),
+    h("div", { class: "controls" }, gamesBtn, muteBtn, h("button", { class: "hangup", title: "Desligar", html: PHONE, onclick: () => hangUp({ byUser: true }) }), keysBtn, themeBtn),
     call.news,
   );
   show(call.screen);
@@ -1056,6 +1091,8 @@ async function askInner(text: string): Promise<SceneKind | undefined> {
 
 interface HangUpOptions {
   title?: string;
+  /** a pessoa apertou desligar (e não uma cena ou o silêncio) */
+  byUser?: boolean;
   /** desligou com raiva: pancada no telefone */
   slam?: boolean;
   /** caiu a ligação: sem bipe */
@@ -1066,6 +1103,8 @@ interface HangUpOptions {
 
 function hangUp(o: HangUpOptions = {}) {
   if (!call.active) return;
+  // desligou na cara dele no meio da fala: ele vai lembrar na próxima ligação
+  if (o.byUser && (speech.speaking || call.asking)) rememberHangUp();
   call.active = false;
   call.gen++; // o que ainda vier desta chamada é resposta velha
   call.game?.close();

@@ -338,14 +338,15 @@ class Eddy:
             self.history = []
             self.seen = []
 
-    def scene_line(self, kind: str) -> str:
-        """Fala de uma cena sem fala da pessoa (ligar de volta, voltar do gelo…)."""
+    def scene_line(self, kind: str, extra: str = "") -> str:
+        """Fala de uma cena sem fala da pessoa (ligar de volta, voltar do gelo…).
+        `extra` é a lembrança da tela (o que ele dizia quando desligaram)."""
         if kind in ("hold", "hold_back"):
             return scenes.fallback(kind, self.lang)
         call = self.call
         with self.lock:
             messages = ([{"role": "system", "content": system_prompt(self.profile)}]
-                        + self.history[-12:] + [{"role": "user", "content": scenes.note(kind).strip()}])
+                        + self.history[-12:] + [{"role": "user", "content": (scenes.note(kind) + scenes.memo(extra)).strip()}])
             try:
                 line = llm.chat(llm.model(), messages, should_stop=lambda: self.call != call)["content"]
                 line = re.sub(r"(?s)<think>.*?</think>", "", line).strip() or scenes.fallback(kind, self.lang)

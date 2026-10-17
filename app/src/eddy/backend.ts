@@ -21,7 +21,7 @@ export const LINKS = {
 export type SceneKind =
   | "bye" | "bye_callback" | "insult" | "insult_callback" | "rival" | "rival_return"
   | "praise" | "surprise_call" | "surprise_declined" | "hold" | "hold_back"
-  | "game_won" | "game_lost" | "game_draw" | "game_quit";
+  | "game_won" | "game_lost" | "game_draw" | "game_quit" | "hung_up_on";
 
 /** Algo que o Eddy FAZ na tela (core/actions.py reconhece, a tela executa). */
 export type Action =
@@ -68,8 +68,9 @@ export interface Backend {
   turn(text: string, p: Profile, onToken: (t: string) => void, o?: TurnOptions): Promise<TurnResult>;
   /** Notas e falas de reserva das cenas, no idioma da pessoa. */
   scenes(p: Profile): Promise<SceneBundle>;
-  /** Fala de uma cena sem fala da pessoa (ligar de volta, voltar do gelo…). */
-  sceneLine(kind: SceneKind, p: Profile): Promise<string>;
+  /** Fala de uma cena sem fala da pessoa (ligar de volta, voltar do gelo…).
+   *  `extra` = a lembrança da tela (o que ele dizia quando desligaram). */
+  sceneLine(kind: SceneKind, p: Profile, extra?: string): Promise<string>;
   /** O Eddy escreve (ou conserta, com `fix`) um jogo; devolve a resposta inteira do modelo. */
   makeGame(idea: string, p: Profile, onToken: (t: string) => void, fix?: { code: string; error: string }): Promise<string>;
   /** Onde o jogo roda: um endereço (PC, outra origem) ou null (web: iframe com srcdoc). */
@@ -124,8 +125,8 @@ const desktop: Backend = {
     return text;
   },
   hostGame: (html) => Api.hostGame(html),
-  async sceneLine(kind) {
-    return (await Api.scene(kind)).text;
+  async sceneLine(kind, _p, extra) {
+    return (await Api.scene(kind, extra)).text;
   },
   async turn(text, _p, onToken, o = {}) {
     let out: TurnResult = { text: "" };
@@ -296,10 +297,11 @@ const web: Backend = {
   async hostGame() {
     return null;
   },
-  async sceneLine(kind) {
+  async sceneLine(kind, _p, extra) {
     if (kind === "hold" || kind === "hold_back" || !sceneData?.directions[kind]) return sceneFallback(sceneData, kind);
     const minha = call;
-    const messages = [{ role: "system", content: system }, ...history.slice(-12), { role: "user", content: sceneData.directions[kind].trim() }];
+    const memo = extra ? `\n\n[LEMBRANÇA — não leia em voz alta, só use: ${extra.split(/\s+/).join(" ").slice(0, 600)}]` : "";
+    const messages = [{ role: "system", content: system }, ...history.slice(-12), { role: "user", content: sceneData.directions[kind].trim() + memo }];
     let line = "";
     try {
       line = (await chat(messages, () => {}, true)).trim();

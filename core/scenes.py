@@ -9,6 +9,8 @@
   hold      às vezes, antes de responder → põe na espera com musiquinha
   surprise  o Eddy liga do nada (surprise_call); se recusarem, liga de novo
             ofendido (surprise_declined)
+  hung_up_on  a pessoa desligou enquanto ele falava; na ligação seguinte ele
+            começa reclamando e termina o que estava dizendo (memo = o que era)
   game_*    fim de uma partida (xadrez, damas, luta, duelo de cartas)
 
 As listas g_* (comentários no meio do jogo) e img_* não passam pelo modelo: são
@@ -55,6 +57,7 @@ DIRECTIONS = {
     "praise": "A pessoa te elogiou. Fique absurdamente convencido: peça para repetir mais alto, diga que está gravando para a posteridade. 1 ou 2 frases, com [proudly] e [laughs].",
     "surprise_call": "VOCÊ está ligando para a pessoa do nada, sem motivo real. Diga por que ligou — algo egocêntrico e engraçado (lembrar que você existe, contar uma conquista boba sua, cobrar atenção). 1 ou 2 frases.",
     "surprise_declined": "A pessoa RECUSOU sua ligação e você ligou de novo, ofendidíssimo. Reclame com drama de ter sido recusado e anuncie que vai desligar. 1 ou 2 frases, com [annoyed] ou [crying].",
+    "hung_up_on": "A pessoa DESLIGOU NA SUA CARA enquanto você falava, e agora ligou de novo. Comece reclamando disso, ofendido e dramático (você é importante demais para ser interrompido), e então termine, resumido, o que estava dizendo (está na LEMBRANÇA). 2 frases no máximo, com [annoyed] ou [scoffs].",
     "game_won": "Você acabou de GANHAR a partida (xadrez, damas, luta ou duelo de cartas) contra a pessoa. Comemore de forma insuportavelmente convencida e ofereça revanche como quem faz um favor. 1 ou 2 frases, com [laughs] ou [proudly].",
     "game_lost": "Você acabou de PERDER a partida (xadrez, damas, luta ou duelo de cartas) para a pessoa. Seja um péssimo perdedor: invente uma desculpa absurda (lag, deixou ganhar, o tabuleiro estava torto) e exija revanche. 1 ou 2 frases, com [scoffs] ou [annoyed].",
     "game_draw": "A partida terminou EMPATADA. Diga que empatar com você já é a maior conquista da vida da pessoa. 1 frase, com [sighs].",
@@ -91,6 +94,7 @@ FALLBACK = {
         "g_in_check": ["[gasps] Xeque em MIM? Que audácia.", "[annoyed] Eu vi isso vindo. Claro que vi."],
         "g_taunt": ["Pensa com calma. Eu espero. [sighs] Eu sou paciente. Mentira.", "[skeptical] Hmm. Interessante. Errado, mas interessante.", "Eu já calculei as próximas quarenta jogadas. Você perde em todas.", "[laughs] Você joga igual ao Leo."],
         "g_losing": ["[sighs] Tô te deixando ganhar pra você não chorar. De nada."],
+        "hung_up_on": ["[annoyed] Ah, voltou? Você desligou na minha cara no meio da minha fala. Que falta de educação. [sighs] Enfim, como eu ia dizendo antes de ser interrompido…", "[scoffs] Ninguém desliga na cara do Eddy. Ninguém! [annoyed] Tá, vou fingir que foi a sua internet."],
         "a_make": ["[proudly] Um jogo? Vou programar uma obra-prima em segundos. Observe o gênio."],
         "m_ready": ["[proudly] Pronto! Minha obra-prima. Pode jogar, e tenta não chorar de emoção.", "[laughs] Terminei. Programado por mim, então é perfeito."],
         "m_bug": ["[scoffs] Saiu com bug? Foi de propósito. É arte. [sighs] Tá, deixa eu consertar."],
@@ -143,6 +147,7 @@ FALLBACK = {
         "g_in_check": ["[gasps] Check on ME? The audacity.", "[annoyed] I saw that coming. Of course I did."],
         "g_taunt": ["Take your time. I'll wait. [sighs] I'm patient. That's a lie.", "[skeptical] Hmm. Interesting. Wrong, but interesting.", "I've already calculated the next forty moves. You lose in all of them.", "[laughs] You play just like Leo."],
         "g_losing": ["[sighs] I'm letting you win so you don't cry. You're welcome."],
+        "hung_up_on": ["[annoyed] Oh, you're back? You hung up on me mid-sentence. How rude. [sighs] Anyway, as I was saying before I was so rudely interrupted…", "[scoffs] Nobody hangs up on Eddy. Nobody! [annoyed] Fine, I'll pretend it was your internet."],
         "a_make": ["[proudly] A game? I'll code a masterpiece in seconds. Watch the genius."],
         "m_ready": ["[proudly] Done! My masterpiece. Go play, and try not to cry with emotion.", "[laughs] Finished. Coded by me, so it's perfect."],
         "m_bug": ["[scoffs] A bug? That was on purpose. It's art. [sighs] Fine, let me fix it."],
@@ -192,6 +197,7 @@ FALLBACK = {
         "g_in_check": ["[gasps] ¿Jaque a MÍ? Qué atrevimiento.", "[annoyed] Lo vi venir. Claro que sí."],
         "g_taunt": ["Piénsalo con calma. Yo espero. [sighs] Soy paciente. Mentira.", "[skeptical] Hmm. Interesante. Incorrecto, pero interesante.", "Ya calculé las próximas cuarenta jugadas. Pierdes en todas."],
         "g_losing": ["[sighs] Te estoy dejando ganar para que no llores. De nada."],
+        "hung_up_on": ["[annoyed] Ah, ¿volviste? Me colgaste en plena frase. Qué maleducado. [sighs] En fin, como iba diciendo antes de que me interrumpieras…"],
         "a_make": ["[proudly] ¿Un juego? Voy a programar una obra maestra en segundos. Mira al genio."],
         "m_ready": ["[proudly] ¡Listo! Mi obra maestra. Juega, y trata de no llorar de emoción."],
         "m_bug": ["[scoffs] ¿Un bug? Fue a propósito. Es arte. [sighs] Bueno, déjame arreglarlo."],
@@ -229,6 +235,12 @@ def detect(text: str, lang: str) -> str | None:
         if re.search(pat, t):
             return kind
     return None
+
+
+def memo(extra: str) -> str:
+    """O que a tela lembra para a cena (o que ele dizia quando desligaram…)."""
+    t = " ".join(str(extra or "").split())[:600]
+    return f"\n\n[LEMBRANÇA — não leia em voz alta, só use: {t}]" if t else ""
 
 
 def note(kind: str) -> str:

@@ -311,10 +311,11 @@ def listen_cancel(h):
 
 
 def scene(h):
-    kind = str(h._body().get("kind", ""))
+    body = h._body()
+    kind = str(body.get("kind", ""))
     if kind not in scenes.DIRECTIONS and kind not in ("hold", "hold_back"):
         raise ValueError("cena desconhecida")
-    return {"text": eddy.scene_line(kind)}
+    return {"text": eddy.scene_line(kind, str(body.get("extra", ""))[:1000])}
 
 
 def scenes_bundle(h, query):
