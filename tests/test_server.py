@@ -16,6 +16,7 @@ from http.server import ThreadingHTTPServer
 from unittest import mock
 
 import assistant
+import eleven
 import events
 import llm
 import server
@@ -68,15 +69,26 @@ class ServerTest(unittest.TestCase):
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
-        server.eddy.set_profile({"nome": "Zeca", "idade": 30, "idioma": "pt"})
+
+        # As rotas leem o `eddy` global do servidor, e o `Eddy` guarda o estado da
+        # chamada (voz, perfil, conversa, falas de silêncio já usadas). Um teste que
+        # muda a voz ou enche a conversa deixaria isso para o teste seguinte, e
+        # `set_profile` só limpa o histórico. Cada teste recebe um Eddy novo e o
+        # global volta ao sítio no cleanup — que corre mesmo se o teste falhar.
+        self.eddy = assistant.Eddy()
+        patcher = mock.patch.object(server, "eddy", self.eddy)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.eddy.set_profile({"nome": "Zeca", "idade": 30, "idioma": "pt"})
 
         self.srv = ThreadingHTTPServer(("127.0.0.1", 0), server.Api)
         self.srv.daemon_threads = True
         self.base = f"http://127.0.0.1:{self.srv.server_address[1]}"
         threading.Thread(target=self.srv.serve_forever, kwargs={"poll_interval": 0.02},
                          daemon=True).start()
-        self.addCleanup(self.srv.shutdown)
+        # LIFO: shutdown primeiro, só depois de fechar o socket
         self.addCleanup(self.srv.server_close)
+        self.addCleanup(self.srv.shutdown)
 
     def get(self, path, **kw):
         status, raw, headers = http(self.base, "GET", path, **kw)
@@ -204,7 +216,9 @@ class CallTest(ServerTest):
         status, body, _ = self.post("/api/eddy/call/start")
         self.assertEqual(status, 200)
         self.assertEqual(body["text"], "[sighs] Alô, garoto.")
-        self.assertIn("voice", body)
+        # a voz deste Eddy (novo em cada teste): se o estado vaza de um teste para
+        # outro, este valor deixa de ser a voz padrão e o teste dá por si
+        self.assertEqual(body["voice"], eleven.default_voice())
 
     def test_the_silence_line_is_answered(self):
         status, body, _ = self.post("/api/eddy/call/silence", {"final": False})
@@ -223,8 +237,9 @@ class CallTest(ServerTest):
         self.assertEqual(body["profile"]["sexo"], "outro")
 
     def test_another_voice_can_be_chosen(self):
-        _, body, _ = self.post("/api/eddy/config", {"voice": "pf_dora"})
-        self.assertEqual(body["voice"], "pf_dora")
+        # uma voz diferente da padrão, para o teste apanhar se a escolha vazar
+        _, body, _ = self.post("/api/eddy/config", {"voice": "pm_santa"})
+        self.assertEqual(body["voice"], "pm_santa")
 
 
 class ListenTest(ServerTest):
@@ -302,17 +317,22 @@ class TtsTest(ServerTest):
 
 
 class ResetRouteTest(ServerTest):
-    """`/api/eddy/reset` está nas rotas e é o que o painel usaria para limpar a
-    conversa — mas `Eddy` não tem esse método. Fica registado aqui como falha
-    conhecida: quando o `Eddy.reset()` existir, este teste passa sem o
-    @expectedFailure e a suite avisa."""
+    """`POST /api/eddy/reset` está declarada nas rotas, mas `Eddy` não tem o
+    método `reset()` que ela chama (core/server.py:209): hoje responde 500 com
+    `AttributeError`. É o defeito do issue #8, que fica fora deste PR — corrigi-lo
+    aqui seria mudar comportamento, não acrescentar testes.
+
+    O teste escreve o que a rota promete (200, conversa limpa) e leva
+    @expectedFailure até o issue #8 o resolver. Se a rota deixar de dar 500, o
+    teste passa sem querer, o unittest conta isso como "unexpected success" e a
+    suite fica vermelha a pedir que se tire o decorator."""
 
     @unittest.expectedFailure
     def test_resetting_the_call_forgets_the_conversation(self):
-        server.eddy.history.append({"role": "user", "content": "oi"})
+        self.eddy.history.append({"role": "user", "content": "oi"})
         status, body, _ = self.post("/api/eddy/reset")
         self.assertEqual((status, body), (200, {"ok": True}))
-        self.assertEqual(server.eddy.history, [])
+        self.assertEqual(self.eddy.history, [])
 
 
 if __name__ == "__main__":
