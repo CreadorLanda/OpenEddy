@@ -178,6 +178,11 @@ def eddy_turn(h):
     h._sse_start()
     try:
         out = eddy.turn(text, lambda t: h._sse({"type": "token", "token": t}))
+        if out.get("stale"):
+            # A pessoa desligou (ou ligou outra vez) enquanto o Eddy pensava: a
+            # resposta é de uma chamada que já não existe. O stream fecha sem
+            # `done`, para o cliente não pintar nada na chamada nova.
+            return
         h._sse({"type": "done", **out})
     except (BrokenPipeError, ConnectionResetError):
         pass
@@ -190,7 +195,48 @@ def eddy_config(h):
 
 
 def eddy_profile(h):
-    return eddy.set_profile(h._body())
+    """O `owner` viaja com o perfil: é a conta da pessoa (o username do Puter) e
+    o âmbito da memória. Sem ele, a memória fica desligada."""
+    body = h._body()
+    return eddy.set_profile(body, body.get("owner"))
+
+
+# ── memória entre chamadas ─────────────────────────────────────────────────────
+#
+# Nenhuma destas rotas aceita um dono no corpo ou no caminho: o âmbito é sempre
+# o dono ligado a este `Eddy`, que veio no perfil. O token da sessão continua a
+# ser a porta de entrada, como em todas as rotas.
+
+def _sem_dono():
+    if not eddy.owner:
+        raise ValueError("memória sem dono: entra com o Puter primeiro")
+    return eddy.owner
+
+
+def memory_status(h, query):  # `query` é o que o router passa a todas as rotas GET
+    dono = _sem_dono()
+    return {"enabled": eddy.memory.enabled(dono), "entries": eddy.memory.listing(dono)}
+
+
+def memory_toggle(h):
+    body = h._body()
+    if not isinstance(body.get("enabled"), bool):
+        raise ValueError("'enabled' tem de ser true ou false")
+    return {"enabled": eddy.memory.set_enabled(_sem_dono(), body["enabled"])}
+
+
+def memory_add(h):
+    # O texto guardado é o normalizado (espaços juntos, cortado); a tela volta a
+    # listar, por isso aqui basta o id.
+    return {"id": eddy.memory.add(_sem_dono(), str(h._body().get("text", "")))}
+
+
+def memory_delete(h, mem_id):
+    return {"deleted": eddy.memory.delete(_sem_dono(), int(mem_id))}
+
+
+def memory_clear(h):
+    return {"removed": eddy.memory.clear(_sem_dono())}
 
 
 def call_start(h):
@@ -273,6 +319,11 @@ ROUTES = [
     ("GET", r"/api/events", events_stream),
     ("GET", r"/api/meta", meta),
     ("POST", r"/api/eddy/turn", eddy_turn),
+    ("GET", r"/api/eddy/memory", memory_status),
+    ("POST", r"/api/eddy/memory", memory_toggle),
+    ("POST", r"/api/eddy/memory/add", memory_add),
+    ("DELETE", r"/api/eddy/memory/(\d+)", memory_delete),
+    ("POST", r"/api/eddy/memory/clear", memory_clear),
     ("POST", r"/api/eddy/config", eddy_config),
     ("POST", r"/api/eddy/reset", eddy_reset),
     ("POST", r"/api/eddy/profile", eddy_profile),

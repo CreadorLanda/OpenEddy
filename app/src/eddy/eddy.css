@@ -42,6 +42,16 @@ button.big { padding: 12px 26px; font-size: 15px; border-radius: 12px; }
 .seg:hover { background: transparent; color: #cfefff; }
 .seg.on { background: #12364a; color: #bdf3ff; }
 
+/* memória entre chamadas */
+.card.form .mem { border-top: 1px solid #16303c; margin-top: 16px; padding-top: 14px; }
+.card.form .mem h3 { margin: 0 0 4px; font-size: 14px; color: #dff8ff; }
+.mem-add { display: flex; gap: 8px; margin-top: 10px; }
+.mem-add input { flex: 1; }
+.mem-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.mem-item { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #cfefff; }
+.mem-item span { flex: 1; }
+.mem-item button { padding: 2px 8px; font-size: 14px; line-height: 1; }
+
 /* topo */
 .top { position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: center; gap: 10px; padding: 14px 16px; z-index: 5; }
 .hello { color: #9fc6d4; font-weight: 500; }

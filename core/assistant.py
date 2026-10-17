@@ -5,12 +5,14 @@ conta Puter e decide como o Eddy chama a pessoa e em que língua fala. Atalhos l
 hora) respondem sem passar pelo modelo — na CPU cada resposta custa segundos.
 """
 
+import itertools
 import random
 import re
 import threading
 
 import eleven
 import llm
+import memory
 import scenes
 import web
 
@@ -197,7 +199,9 @@ def _nicks(p: dict) -> list[str]:
     return _apelidos(p["sexo"], p["idade"], p["idioma"])
 
 
-def system_prompt(p: dict) -> str:
+def system_prompt(p: dict, memoria: str = "") -> str:
+    """A persona. `memoria` são factos que a pessoa mandou guardar: entram no
+    fim, marcados como dados, e não trocam uma vírgula do que está acima."""
     sexo = {"masculino": "homem", "feminino": "mulher"}.get(p["sexo"], "pessoa")
     quem = f"{p['nome']}, {sexo}, {p['idade']} anos."
     if p["idade"] < 18:
@@ -205,7 +209,7 @@ def system_prompt(p: dict) -> str:
     L = LANGS[p["idioma"]]
     return STYLE.format(nome=p["nome"], quem=quem, lingua=L["lingua"], exemplo=L["exemplo"],
                         apelidos=", ".join(f'"{a}"' for a in _nicks(p)),
-                        falas="\n".join(f'- "{f}"' for f in L["falas"]))
+                        falas="\n".join(f'- "{f}"' for f in L["falas"])) + memoria
 
 
 def greeting(p: dict) -> str:
@@ -241,7 +245,13 @@ def route(text: str, p: dict):
 
 
 class Eddy:
-    """O Eddy do app no PC: um usuário, conversa guardada aqui, cérebro no Ollama."""
+    """O Eddy do app no PC: um usuário, conversa guardada aqui, cérebro no Ollama.
+
+    `call` é a geração da chamada: cada `start_call` (ou troca de perfil) abre uma
+    nova, e o que ficou a pensar na geração anterior passa a ser resposta velha.
+    Sem isto, um turno que acaba depois da pessoa desligar escreve a resposta na
+    conversa da chamada seguinte.
+    """
 
     def __init__(self):
         self.voice = eleven.default_voice()
@@ -249,6 +259,16 @@ class Eddy:
         self.history: list[dict] = []
         self.seen: list[str] = []  # falas de silêncio já usadas nesta ligação
         self.lock = threading.Lock()
+        # `publish` é o lock curto da conversa: segura a geração, a publicação de
+        # um token e a escrita no historial. Sem ele, um turno podia decidir que a
+        # chamada ainda é sua, a pessoa ligar nesse meio e o token sair na mesma.
+        self.publish = threading.Lock()
+        self._calls = itertools.count(1)  # next() não cede o meio: duas ligações não trocam a geração
+        self.call = next(self._calls)
+        # A memória entre chamadas é um extra opt-in e só existe se a pessoa der
+        # um dono (o username da conta). Sem dono é como se estivesse desligada.
+        self.memory = memory.Memory()
+        self.owner: str | None = None
 
     def settings(self):
         return {"voice": self.voice, "profile": self.profile}
@@ -258,10 +278,31 @@ class Eddy:
             self.voice = str(data["voice"])
         return self.settings()
 
-    def set_profile(self, data):
-        self.profile = clean_profile(data)
-        self.history = []
+    def set_profile(self, data, owner=None):
+        """`owner` é a conta da pessoa (o username do Puter): o âmbito da memória.
+        Sem dono, a memória fica desligada — é o estado de omissão."""
+        profile = clean_profile(data)
+        dono = str(owner).strip()[:80] if owner else ""
+        with self.publish:
+            self.call = next(self._calls)  # o perfil novo zera a conversa: o que ficou a pensar é antigo
+            self.profile = profile
+            self.history = []
+            self.owner = dono or None
         return self.settings()
+
+    def memoria(self, text: str) -> str:
+        """O bloco de factos para o prompt, ou "" se não há nada para dizer.
+
+        Qualquer falha aqui — base fechada, disco cheio, esquema do futuro — dá
+        uma chamada exactamente igual à de sempre. A memória nunca é um requisito
+        para conversar.
+        """
+        if not self.owner:
+            return ""
+        try:
+            return memory.bloco(self.memory.search(self.owner, text))
+        except Exception:  # noqa: BLE001 — um extra não pode rebentar a chamada
+            return ""
 
     @property
     def lang(self) -> str:
@@ -269,24 +310,42 @@ class Eddy:
 
     def start_call(self):
         """Nova ligação: zera a conversa, já carrega o modelo e devolve o 'alô'."""
-        self.history = []
-        self.seen = []
+        with self.publish:
+            self.call = next(self._calls)  # tudo o que ficou a pensar agora é resposta velha
+            self.history = []
+            self.seen = []
         threading.Thread(target=llm.warm_up, args=(llm.model(),), daemon=True).start()
         return greeting(self.profile)
+
+    def reset(self):
+        """Limpa a conversa sem desligar: a mesma voz, o mesmo perfil, e o que
+        estava a pensar passa a ser resposta velha.
+
+        É o `start_call` sem o "alô" e sem acordar o modelo — o que se quer
+        quando a pessoa limpa a conversa a meio da ligação. Não espera pelo turno
+        que estiver a falar: só pelo lock curto da publicação.
+        """
+        with self.publish:
+            self.call = next(self._calls)  # limpar a conversa também invalida o que ficou no ar
+            self.history = []
+            self.seen = []
 
     def scene_line(self, kind: str) -> str:
         """Fala de uma cena sem fala da pessoa (ligar de volta, voltar do gelo…)."""
         if kind in ("hold", "hold_back"):
             return scenes.fallback(kind, self.lang)
+        call = self.call
         with self.lock:
             messages = ([{"role": "system", "content": system_prompt(self.profile)}]
                         + self.history[-12:] + [{"role": "user", "content": scenes.note(kind).strip()}])
             try:
-                line = llm.chat(llm.model(), messages)["content"]
+                line = llm.chat(llm.model(), messages, should_stop=lambda: self.call != call)["content"]
                 line = re.sub(r"(?s)<think>.*?</think>", "", line).strip() or scenes.fallback(kind, self.lang)
             except Exception:
                 line = scenes.fallback(kind, self.lang)
-            self.history.append({"role": "assistant", "content": line})
+            with self.publish:
+                if self.call == call:
+                    self.history.append({"role": "assistant", "content": line})
             return line
 
     def silence_line(self, final=False):
@@ -304,28 +363,68 @@ class Eddy:
             return "Voltei pra minha voz original. A perfeita.", {"settings": self.settings()}
         return route(text, self.profile)
 
+    def _publicar(self, call, on_token):
+        """O `on_token` deste turno: só anuncia se a chamada ainda for a dele.
+
+        Verificar e publicar no mesmo lock é o que garante que nada da chamada
+        antiga sai depois de a nova começar — a verificação por fragmento do
+        `llm.chat` só corre no início de cada linha, e a pessoa pode ligar nesse
+        meio. O lock abrange uma escrita no socket, nunca o modelo, por isso uma
+        chamada nova não fica à espera do Eddy pensar.
+
+        Um token recusado é o sinal de que a chamada mudou, e o `should_stop` que
+        o `llm.chat` avalia no fragmento seguinte larga o laço.
+        """
+
+        def publicar(tok):
+            with self.publish:
+                if self.call == call:
+                    on_token(tok)
+
+        return publicar
+
     def turn(self, text, on_token):
-        """Uma fala da pessoa na ligação. Devolve {text, ...extras}."""
+        """Uma fala da pessoa na ligação. Devolve {text, ...extras}.
+
+        O turno pertence à chamada em que foi pedido — não à que estiver valendo
+        quando conseguir o lock. `start_call` não adquire o lock (uma chamada nova
+        nunca fica à espera de um turno velho), por isso ler a geração só lá dentro
+        deixaria um turno à espera escrever na conversa da chamada seguinte.
+
+        Quando a chamada já não é a sua, devolve `stale` e não escreve nada: a
+        resposta é de uma chamada que já acabou.
+        """
+        call = self.call  # a chamada no momento do pedido, antes de esperar o lock
+        publicar = self._publicar(call, on_token)
         with self.lock:
+            if self.call != call:
+                return {"text": "", "stale": True}  # trocou-se de chamada enquanto esperava
             event = scenes.detect(text, self.lang)
             routed = None if event else self._route(text)
             if routed:
                 answer, extra = routed
-                on_token(answer)
+                publicar(answer)
             else:
+                # O que a pessoa mandou guardar entra no prompt de sistema como
+                # dado, nunca como conversa: a memória não mistura-se no history.
                 content = text + (scenes.note(event) if event else "")
-                messages = ([{"role": "system", "content": system_prompt(self.profile)}]
+                messages = ([{"role": "system",
+                              "content": system_prompt(self.profile, self.memoria(text))}]
                             + self.history[-12:] + [{"role": "user", "content": content}])
                 try:
-                    answer = llm.chat(llm.model(), messages, on_token=on_token)["content"]
+                    answer = llm.chat(llm.model(), messages, on_token=publicar,
+                                      should_stop=lambda: self.call != call)["content"]
                     answer = re.sub(r"(?s)<think>.*?</think>", "", answer).strip()
                 except Exception:
                     if not event:
                         raise
                     answer = scenes.fallback(event, self.lang)
-                    on_token(answer)
+                    publicar(answer)
                 extra = {"event": event} if event else {}
-            self.history += [{"role": "user", "content": text},
-                             {"role": "assistant", "content": answer}]
-            self.history = self.history[-24:]
+            with self.publish:
+                if self.call != call:
+                    return {"text": "", "stale": True}
+                self.history += [{"role": "user", "content": text},
+                                 {"role": "assistant", "content": answer}]
+                self.history = self.history[-24:]
             return {"text": answer, **extra}

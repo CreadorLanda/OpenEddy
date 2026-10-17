@@ -39,9 +39,11 @@ export interface Backend {
   web: boolean;
   /** Vozes para o formulário e a voz padrão; `note` = aviso para a tela inicial. */
   init(): Promise<{ voices: Record<string, string>; voice: string; note: string }>;
-  setProfile(p: Profile, voice?: string): Promise<void>;
+  /** `owner` é a conta da pessoa: o âmbito da memória. Só o núcleo desktop o usa. */
+  setProfile(p: Profile, voice?: string, owner?: string): Promise<void>;
   callStart(p: Profile): Promise<{ greeting: string; voice: string }>;
-  tts(text: string, voice: string, lang: string): Promise<Response>;
+  /** `signal` aborta o pedido no meio (quando a pessoa interrompe a fala). */
+  tts(text: string, voice: string, lang: string, signal?: AbortSignal): Promise<Response>;
   openMic(): Promise<void>;
   closeMic(): void;
   hear(o: HearOptions): Promise<string>;
@@ -71,14 +73,14 @@ const desktop: Backend = {
     else if (!health.model_ready) note = `Modelo ${health.model} não instalado: ./bin/ollama pull ${health.model}`;
     return { voices: meta.voices, voice: meta.eddy.voice, note };
   },
-  async setProfile(p, voice) {
-    await Promise.all([Api.profile(p), voice ? Api.config({ voice }) : Promise.resolve()]);
+  async setProfile(p, voice, owner) {
+    await Promise.all([Api.profile(p, owner), voice ? Api.config({ voice }) : Promise.resolve()]);
   },
   async callStart() {
     const r = await Api.callStart();
     return { greeting: r.text, voice: r.voice };
   },
-  tts: (text, voice) => Api.ttsStream(text, voice),
+  tts: (text, voice, _lang, signal) => Api.ttsStream(text, voice, signal),
   async openMic() {},
   closeMic() {},
   async hear() {
@@ -132,6 +134,13 @@ let system = "";
 let history: { role: string; content: string }[] = [];
 let seenSilence: string[] = []; // falas de silêncio já usadas nesta ligação
 let sceneData: SceneBundle | null = null;
+/**
+ * Geração da chamada: cada `callStart` abre uma nova. Um turno que ainda esteja
+ * a pedir voz quando isso acontece é de uma chamada que já acabou, e não escreve
+ * nada em `history`/`seenSilence` — senão a conversa nova começa a saber coisas
+ * da antiga.
+ */
+let call = 0;
 
 async function chat(messages: { role: string; content: string }[], onToken: (t: string) => void, withModel: boolean) {
   const stream = await puter().ai.chat(messages, withModel && model ? { model, stream: true } : { stream: true });
@@ -160,18 +169,21 @@ const web: Backend = {
   },
   async setProfile() {},
   async callStart(p) {
+    const minha = ++call; // a chamada nova invalida tudo o que estava a meio
     const r = await post<{ system: string; greeting: string; scenes: SceneBundle }>("/api/web/start", { profile: p });
+    if (minha !== call) return { greeting: "", voice: "" };
     system = r.system;
     sceneData = r.scenes;
     history = [{ role: "assistant", content: r.greeting }];
     seenSilence = [];
     return { greeting: r.greeting, voice: "" };
   },
-  tts: (text, _voice, lang) =>
+  tts: (text, _voice, lang, signal) =>
     fetch("/api/web/tts", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${puter()?.authToken ?? ""}` },
       body: JSON.stringify({ text, lang }),
+      signal,
     }),
   openMic: () => mic.open(),
   closeMic: () => mic.close(),
@@ -181,11 +193,13 @@ const web: Backend = {
   },
   cancelHear: () => mic.stopListening(),
   async silence(p, final) {
+    const minha = call;
     const { text } = await post<{ text: string }>("/api/web/silence", { profile: p, final, seen: seenSilence });
-    seenSilence.push(text);
+    if (minha === call) seenSilence.push(text); // uma fala de silêncio de outra chamada não conta
     return text;
   },
   async turn(text, p, onToken) {
+    const minha = call;
     const routed = await post<{ text: string | null; news?: NewsItem[]; event?: SceneKind }>("/api/web/route", { text, profile: p });
     let answer: string;
     if (routed.text) {
@@ -208,8 +222,10 @@ const web: Backend = {
         }
       }
     }
-    history.push({ role: "user", content: text }, { role: "assistant", content: answer });
-    history = history.slice(-24);
+    if (minha === call) {
+      history.push({ role: "user", content: text }, { role: "assistant", content: answer });
+      history = history.slice(-24);
+    }
     return { text: answer, news: routed.news, event: routed.event };
   },
   async scenes() {
@@ -217,6 +233,7 @@ const web: Backend = {
   },
   async sceneLine(kind) {
     if (kind === "hold" || kind === "hold_back" || !sceneData?.directions[kind]) return sceneFallback(sceneData, kind);
+    const minha = call;
     const messages = [{ role: "system", content: system }, ...history.slice(-12), { role: "user", content: sceneData.directions[kind].trim() }];
     let line = "";
     try {
@@ -229,7 +246,7 @@ const web: Backend = {
       }
     }
     line ||= sceneFallback(sceneData, kind);
-    history.push({ role: "assistant", content: line });
+    if (minha === call) history.push({ role: "assistant", content: line });
     return line;
   },
 };

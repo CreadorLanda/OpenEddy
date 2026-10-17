@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   clearScreen: false,
@@ -9,5 +9,9 @@ export default defineConfig({
     sourcemap: false,
     emptyOutDir: true,
     rollupOptions: { input: { app: "index.html", landing: "landing.html" } },
+  },
+  test: {
+    environment: "node",
+    include: ["src/**/*.test.ts"],
   },
 });

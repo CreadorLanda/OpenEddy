@@ -8,9 +8,11 @@ import "./eddy.css";
 import { Native, subscribe, type NewsItem, type SceneBundle } from "../core/api";
 import { h, externalLinks } from "../core/dom";
 import type { Profile } from "../core/types";
-import { EddyFace, expressionForTag, type Expression, type FaceState } from "./eddy";
+import { EddyFace, type FaceState } from "./eddy";
 import { Ringer } from "./ring";
 import { B, LINKS, sceneFallback, type SceneKind } from "./backend";
+import { memoryPanel } from "./memory";
+import { caption, readPcm, SpeechQueue, voiceText, splitAtTags } from "./speech";
 import * as Puter from "./puter";
 
 const root = document.getElementById("root")!;
@@ -97,14 +99,8 @@ let analyser: AnalyserNode | null = null;
 let ringer: Ringer | null = null;
 const active = new Set<AudioBufferSourceNode>();
 let nextAt = 0;
-let queue: { res: Promise<Response | null>; expr: Expression | null; text: string }[] = [];
-// voz de reserva: a do navegador, quando o servidor recusa (limite do dia, sem rede)
-let serverVoiceOff = false;
 let localAmp = 0;
 let localSpeaking = false;
-let running = false;
-let token = 0;
-let idleWaiters: (() => void)[] = [];
 const ampBuf = new Float32Array(1024);
 
 function ensureAudio() {
@@ -128,67 +124,6 @@ function speechAmp() {
   return Math.min(1, Math.sqrt(sum / ampBuf.length) * 5);
 }
 
-/** Texto para a legenda: sem [sighs], markdown nem links. */
-function caption(text: string) {
-  return voiceText(text).replace(/\[[^\]]{1,30}\]/g, "").replace(/\s+/g, " ").trim();
-}
-
-/** Texto para a voz: mantém as marcações [sighs]/[laughs], que a ElevenLabs interpreta. */
-function voiceText(text: string) {
-  return text
-    .replace(/<think>[\s\S]*?<\/think>/g, "")
-    .replace(/\*[^*]+\*/g, "")
-    .replace(/https?:\/\/\S+/g, "")
-    .replace(/[*_`#>()]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-/**
- * A cara de um pedaço da fala: a marcação dele manda; sem marcação, o próprio
- * texto dá a reação (risada, pergunta, exclamação). Sem pista, mantém a atual.
- */
-function exprOf(text: string): Expression | null {
-  for (const m of text.matchAll(/\[([^\]]{1,30})\]/g)) {
-    const e = expressionForTag(m[1]);
-    if (e) return e;
-  }
-  const t = caption(text).toLowerCase();
-  if (/\b(ha){2,}|\b(he){2,}|kkk|rsrs|haha|jaja/.test(t)) return "laughing";
-  if (/\?\s*$/.test(t)) return "skeptical";
-  if (/!\s*$/.test(t) && t.length < 90) return "surprised";
-  if (/\b(óbvio|obvio|claro que|genial|gênio|perfeito|obviously|of course|brilliant)\b/.test(t)) return "proud";
-  return null;
-}
-
-function enqueue(res: Promise<Response | null>, text: string) {
-  queue.push({ res, expr: exprOf(text), text });
-  if (!running) void drain();
-}
-
-/**
- * Corta a fala onde há marcação ([sarcastic], [gasps]…), inclusive no meio da
- * frase: cada pedaço vira um pedido de voz próprio, e o rosto troca no instante
- * em que aquele pedaço começa a tocar. A marcação fica no começo do pedaço.
- */
-function splitAtTags(text: string): string[] {
-  const parts = text.split(/(?=\[[^\]]{1,30}\])/);
-  const out: string[] = [];
-  for (const part of parts) {
-    // pedaço curto demais (só a marcação, ou uma palavra) gruda no próximo/anterior
-    if (out.length && caption(out[out.length - 1]).length < 8) out[out.length - 1] += part;
-    else out.push(part);
-  }
-  if (out.length > 1 && caption(out[out.length - 1]).length < 8) out[out.length - 2] += out.pop();
-  return out.map((p) => p.trim()).filter(Boolean);
-}
-
-function queueSpeech(text: string) {
-  for (const t of splitAtTags(voiceText(text))) {
-    if (caption(t)) enqueue(serverVoiceOff ? Promise.resolve(null) : B.tts(t, voice, lang()).catch(() => null), t);
-  }
-}
-
 /** Agenda um bloco logo depois do anterior; resolve quando ele termina. */
 function schedule(buf: AudioBuffer): Promise<void> {
   const ctx = audioCtx!;
@@ -207,80 +142,34 @@ function schedule(buf: AudioBuffer): Promise<void> {
   });
 }
 
-async function play(res: Response, my: number) {
+async function play(res: Response, my: number, signal: AbortSignal) {
   const ctx = ensureAudio();
   const type = res.headers.get("content-type") ?? "";
   if (!type.startsWith("audio/pcm") || !res.body) {
     const buf = await ctx.decodeAudioData(await res.arrayBuffer());
-    if (my === token) await schedule(buf);
+    if (my === speech.current) await schedule(buf);
     return;
   }
   const rate = Number(/rate=(\d+)/.exec(type)?.[1] ?? 24000);
-  const minBytes = Math.round(rate * 0.12) * 2;
-  const reader = res.body.getReader();
-  let pend = new Uint8Array(0);
   let last: Promise<void> = Promise.resolve();
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (my !== token) {
-      void reader.cancel();
-      return;
-    }
-    if (value) {
-      const joined = new Uint8Array(pend.length + value.length);
-      joined.set(pend);
-      joined.set(value, pend.length);
-      pend = joined;
-    }
-    if (pend.length >= minBytes || (done && pend.length >= 2)) {
-      const n = pend.length >> 1;
-      const view = new DataView(pend.buffer, pend.byteOffset, n * 2);
-      const buf = ctx.createBuffer(1, n, rate);
-      const ch = buf.getChannelData(0);
-      for (let i = 0; i < n; i++) ch[i] = view.getInt16(i * 2, true) / 32768;
-      pend = pend.slice(n * 2);
-      last = schedule(buf);
-    }
-    if (done) break;
-  }
+  // A leitura solta-se no `stop`: o sinal da sessão abortado cancela o leitor,
+  // mesmo que o servidor esteja calado há segundos (ver speech.readPcm).
+  const inteira = await readPcm(res.body, rate, signal, (pcm) => {
+    const n = pcm.byteLength >> 1;
+    const view = new DataView(pcm.buffer, pcm.byteOffset, n * 2);
+    const buf = ctx.createBuffer(1, n, rate);
+    const ch = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) ch[i] = view.getInt16(i * 2, true) / 32768;
+    last = schedule(buf);
+  });
+  if (!inteira) return; // interrompido: o áudio que restou não toca
   await last;
-}
-
-async function drain() {
-  running = true;
-  const my = token;
-  while (queue.length && my === token) {
-    const item = queue.shift()!;
-    const res = await item.res;
-    if (my !== token) continue;
-    if (call.face) {
-      call.face.state = "speak";
-      if (item.expr) call.face.expression = item.expr;
-    }
-    try {
-      if (res && res.ok) {
-        setStatus("Eddy falando… (Espaço interrompe)");
-        await play(res, my);
-      } else {
-        if (res) {
-          const why = ((await res.json().catch(() => ({}))) as { error?: string }).error ?? res.statusText;
-          if (res.status === 429) serverVoiceOff = true; // não adianta insistir hoje
-          setStatus(`${why} — usando a voz do navegador.`);
-        }
-        await speakLocal(caption(item.text), my);
-      }
-    } catch {
-      /* uma frase perdida não derruba a ligação */
-    }
-  }
-  if (my === token) running = false;
-  if (!running) for (const w of idleWaiters.splice(0)) w();
 }
 
 /** Voz do próprio navegador (Web Speech): grátis e local, mas sem o Sergio. */
 function speakLocal(text: string, my: number): Promise<void> {
   const synth = window.speechSynthesis;
-  if (!synth || !text || my !== token) return Promise.resolve();
+  if (!synth || !text || my !== speech.current) return Promise.resolve();
   return new Promise((resolve) => {
     const u = new SpeechSynthesisUtterance(text);
     u.lang = { pt: "pt-BR", en: "en-US", es: "es-ES" }[lang()];
@@ -302,28 +191,31 @@ function speakLocal(text: string, my: number): Promise<void> {
   });
 }
 
-/** Resolve quando o Eddy termina de falar tudo o que está na fila. */
-function speechIdle(): Promise<void> {
-  if (!running && !queue.length) return Promise.resolve();
-  return new Promise((r) => idleWaiters.push(r));
-}
-
-function stopSpeech() {
-  token++;
-  queue = [];
-  for (const src of active) {
-    try {
-      src.stop();
-    } catch {
-      /* já parou */
+// A fila (cortar nas marcações, descartar resposta velha, cair na voz do
+// navegador quando o servidor recusa) mora em speech.ts; aqui só o Web Audio.
+const speech = new SpeechQueue({
+  fetchVoice: (t, signal) => B.tts(t, voice, lang(), signal).catch(() => null),
+  play,
+  speakLocal,
+  stopAll() {
+    for (const src of active) {
+      try {
+        src.stop();
+      } catch {
+        /* já parou */
+      }
     }
-  }
-  active.clear();
-  nextAt = 0;
-  if (localSpeaking) window.speechSynthesis?.cancel();
-  running = false;
-  for (const w of idleWaiters.splice(0)) w();
-}
+    active.clear();
+    nextAt = 0;
+    if (localSpeaking) window.speechSynthesis?.cancel();
+  },
+  onStatus: (t) => setStatus(t),
+  onSpeak: (expr) => {
+    if (!call.face) return;
+    call.face.state = "speak";
+    if (expr) call.face.expression = expr;
+  },
+});
 
 // ── telas: login e perfil ─────────────────────────────────────────────────────
 
@@ -408,7 +300,7 @@ function profileScreen(first: boolean) {
         await Puter.saveProfile(next);
         profile = next;
         voice = voiceSel.value;
-        await B.setProfile(next, voice);
+        await B.setProfile(next, voice, username || undefined);
         homeScreen();
       } catch (e) {
         err.textContent = (e as Error).message;
@@ -423,6 +315,9 @@ function profileScreen(first: boolean) {
     h("label", {}, "Idioma do Eddy"), h("div", { class: "segs" }, ...langs),
     B.web ? null : h("label", {}, "Voz do Eddy"),
     B.web ? null : voiceSel,
+    // A memória precisa do dono ligado no núcleo, por isso só aparece depois do
+    // primeiro perfil guardado.
+    first ? null : memoryPanel(!B.web, () => profileScreen(false)),
     err,
     h("div", { class: "row" }, first ? null : h("button", { type: "button", class: "ghost", onclick: () => homeScreen() }, "Cancelar"), save),
   );
@@ -493,6 +388,12 @@ function scheduleSurprise() {
 
 const call = {
   active: false,
+  /**
+   * Geração da chamada: muda ao desligar e ao ligar outra vez. `call.active` sozinho
+   * não chega — depois de uma chamada nova volta a ser true, e um turno da antiga
+   * que só agora acaba escreveria a resposta na legenda e na voz de Eddy.
+   */
+  gen: 0,
   muted: false,
   typed: "",
   started: 0,
@@ -529,8 +430,9 @@ function resetCall() {
   window.clearTimeout(surpriseTimer);
   onHome = false;
   ensureAudio();
-  stopSpeech();
+  speech.stop();
   call.active = true;
+  call.gen++; // a chamada nova invalida o que a anterior deixou a meio
   call.muted = false;
   call.silences = 0;
   call.typed = "";
@@ -540,8 +442,8 @@ function resetCall() {
 async function say(text: string) {
   if (!text || !call.active) return;
   call.says!.textContent = caption(text);
-  queueSpeech(text);
-  await speechIdle();
+  speech.say(text);
+  await speech.idle();
 }
 
 async function startCall() {
@@ -573,8 +475,10 @@ async function startCall() {
     greeting = r.greeting;
     if (r.voice) voice = r.voice;
     scenes = await B.scenes(profile!).catch(() => null);
-    // o "alô" (cortado nas marcações) já começa a chegar enquanto ainda toca
-    hello = splitAtTags(voiceText(greeting)).map((text) => ({ text, res: B.tts(text, voice, lang()).catch(() => null) }));
+    // o "alô" (cortado nas marcações) já começa a chegar enquanto ainda toca. Vai
+    // com o sinal da sessão: se a pessoa desligar enquanto o telefone toca, o
+    // pedido morre com a chamada em vez de continuar a ser sintetizado.
+    hello = splitAtTags(voiceText(greeting)).map((text) => ({ text, res: B.tts(text, voice, lang(), speech.signal).catch(() => null) }));
     await Promise.all([hello[0]?.res, sleep(Math.max(0, 3300 - (performance.now() - t0)))]);
   } catch (e) {
     ringer!.stop();
@@ -590,8 +494,8 @@ async function startCall() {
 
   inCallScreen();
   call.says!.textContent = caption(greeting);
-  for (const piece of hello) enqueue(piece.res, piece.text);
-  await speechIdle();
+  for (const piece of hello) speech.enqueue(piece.res, piece.text);
+  await speech.idle();
   void loop();
 }
 
@@ -719,7 +623,7 @@ function inCallScreen() {
 
   const faceEl = faceCanvas(call.face, "face");
   faceEl.addEventListener("click", () => {
-    if (running) stopSpeech();
+    if (speech.speaking) speech.stop();
   });
 
   show(
@@ -767,10 +671,13 @@ async function loop() {
         call.silences++;
         if (call.silences === 2 || call.silences === 4) {
           const line = await B.silence(profile!, false);
+          if (!call.active) break;
           await say(line);
         }
         if (call.silences >= 6) {
-          await say(await B.silence(profile!, true));
+          const bye = await B.silence(profile!, true);
+          if (!call.active) break;
+          await say(bye);
           hangUp({ slam: true, title: "O Eddy desligou. Você demorou demais." });
         }
         continue;
@@ -845,12 +752,16 @@ async function ask(text: string): Promise<SceneKind | undefined> {
   call.you!.textContent = text;
   call.says!.textContent = "";
   setFace("think", "Pensando… (ele finge que é difícil)");
+  // A chamada a que este turno pertence. Se desligar ou ligar outra vez, o que
+  // chegar depois é de uma chamada que já não está no ecrã: não entra na legenda,
+  // não fala, não troca a voz.
+  const minha = call.gen;
   let pending = "";
   let full = "";
   // em espera, as frases da resposta ficam guardadas até a musiquinha acabar
   let holding = false;
   const deferred: string[] = [];
-  const speak = (s: string) => (holding ? deferred.push(s) : queueSpeech(s));
+  const speak = (s: string) => (holding ? deferred.push(s) : speech.say(s));
   let hold: Promise<void> = Promise.resolve();
   if (shouldHold()) {
     call.heldOnce = true;
@@ -862,16 +773,16 @@ async function ask(text: string): Promise<SceneKind | undefined> {
       ringer?.holdMusic(true);
       await sleep(5500);
       ringer?.holdMusic(false);
-      if (!call.active) return;
+      if (call.gen !== minha) return;
       call.says!.textContent = "";
-      queueSpeech(sceneFallback(scenes, "hold_back"));
+      speech.say(sceneFallback(scenes, "hold_back"));
       holding = false;
-      for (const s of deferred.splice(0)) queueSpeech(s);
+      for (const s of deferred.splice(0)) speech.say(s);
     })();
   }
   try {
     const out = await B.turn(text, profile!, (tok) => {
-      if (!call.active) return;
+      if (call.gen !== minha) return;
       full += tok;
       pending += tok;
       if (!holding) call.says!.textContent = caption(full);
@@ -881,12 +792,14 @@ async function ask(text: string): Promise<SceneKind | undefined> {
         pending = m[3];
       }
     });
-    if (call.active && pending.trim()) speak(pending);
+    if (call.gen !== minha) return undefined;
+    if (pending.trim()) speak(pending);
     await hold;
-    if (call.active) call.says!.textContent = caption(full);
+    if (call.gen !== minha) return undefined;
+    call.says!.textContent = caption(full);
     if (out.news) renderNews(out.news);
     if (out.settings) voice = out.settings.voice;
-    await speechIdle();
+    await speech.idle();
     return out.event;
   } catch (e) {
     ringer?.holdMusic(false);
@@ -909,7 +822,8 @@ interface HangUpOptions {
 function hangUp(o: HangUpOptions = {}) {
   if (!call.active) return;
   call.active = false;
-  stopSpeech();
+  call.gen++; // o que ainda vier desta chamada é resposta velha
+  speech.stop();
   ringer?.stop();
   ringer?.holdMusic(false);
   if (o.slam) ringer?.slam();
@@ -941,9 +855,9 @@ document.addEventListener("keydown", (ev) => {
   if (!call.active) return;
   const typing = document.activeElement instanceof HTMLInputElement;
   if ((ev.code === "Space" && !typing) || ev.key === "Escape") {
-    if (running) {
+    if (speech.speaking) {
       ev.preventDefault();
-      stopSpeech();
+      speech.stop();
     } else if (ev.key === "Escape") {
       call.news?.classList.remove("open");
     }
@@ -960,7 +874,7 @@ async function afterLogin() {
   await ready;
   profile = await Puter.loadProfile();
   if (!profile) return profileScreen(true);
-  await B.setProfile(profile);
+  await B.setProfile(profile, undefined, username || undefined);
   homeScreen();
 }
 

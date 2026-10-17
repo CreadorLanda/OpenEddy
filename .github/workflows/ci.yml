@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  core:
+    name: core (Python)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # NumPy only: the core tests are stdlib + numpy and never touch Whisper,
+      # Kokoro, Ollama or ElevenLabs (requirements.txt is the desktop app, not CI).
+      - run: pip install numpy
+      - run: python -m unittest discover -s tests -t . -v
+
+  app:
+    name: app (TypeScript)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # vitest 5 supports ^22.12.0 || ^24 || >=26 — on Node 20 npm installs it anyway
+          # but warns EBADENGINE, and the app is outside a supported version.
+          node-version: "22.12"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - run: npm test
+      # tsc --noEmit + build: catches what the tests do not (types and bundling)
+      - run: npm run build
