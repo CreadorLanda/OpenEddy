@@ -462,9 +462,44 @@ class MemoryRouteTest(ServerTest):
         self.post("/api/eddy/memory", {"enabled": True})
         self.post("/api/eddy/memory/add", {"text": "mora em Luanda"})
         self.post("/api/eddy/memory/add", {"text": "segredo do bruno", "owner": "bruno"})
-        _, estado, _ = self.get("/api/eddy/memory", )  # o GET também não leva dono
+        _, estado, _ = self.get("/api/eddy/memory")  # o GET também não leva dono
         self.assertEqual([e["text"] for e in estado["entries"]], ["segredo do bruno", "mora em Luanda"])
         self.assertEqual(self.post("/api/eddy/memory/clear", {"owner": "bruno"})[1], {"removed": 2})
+
+    # ── trocar de dono pelo perfil ────────────────────────────────────────────
+
+    def test_o_perfil_e_a_way_in_do_ambito(self):
+        """O `owner` chega pelo perfil, e é o perfil que troca de conta. Mudar de
+        dono muda o âmbito: a memória que aparece é a da conta nova, e a da
+        anterior fica intacta e inacessível até a pessoa voltar."""
+        self.entra("ana")
+        self.post("/api/eddy/memory", {"enabled": True})
+        self.post("/api/eddy/memory/add", {"text": "a ana mora em Luanda"})
+
+        self.entra("bruno")
+        _, estado, _ = self.get("/api/eddy/memory")
+        self.assertFalse(estado["enabled"], "a conta nova entra desligada")
+        self.assertEqual(estado["entries"], [], "e não vê nada da conta anterior")
+
+        self.post("/api/eddy/memory", {"enabled": True})
+        self.post("/api/eddy/memory/add", {"text": "o bruno mora no Porto"})
+        self.assertEqual([e["text"] for e in self.get("/api/eddy/memory")[1]["entries"]],
+                         ["o bruno mora no Porto"])
+
+        self.entra("ana")  # volta à conta anterior
+        _, estado, _ = self.get("/api/eddy/memory")
+        self.assertTrue(estado["enabled"])
+        self.assertEqual([e["text"] for e in estado["entries"]], ["a ana mora em Luanda"])
+
+    def test_mudar_de_conta_nao_e_inventar_um_dono(self):
+        """Trocar de dono dá o âmbito dessa conta, não a memória dela: quem nunca
+        ligou a memória entra desligado e sem factos."""
+        self.entra("ana")
+        self.entra("bruno")  # o bruno nunca ligou a memória
+        self.assertEqual(self.get("/api/eddy/memory")[1], {"enabled": False, "entries": []})
+        self.assertEqual(self.post("/api/eddy/memory/add", {"text": "facto do bruno"})[0], 200)
+        self.assertEqual([e["text"] for e in self.get("/api/eddy/memory")[1]["entries"]],
+                         ["facto do bruno"])
 
     # ── validação ─────────────────────────────────────────────────────────────
 
