@@ -3,7 +3,7 @@
 
 import { h } from "../../core/dom";
 
-export type GameKind = "chess" | "checkers" | "fight" | "duel";
+export type GameKind = "chess" | "checkers" | "fight" | "duel" | "made";
 export type Level = "easy" | "normal" | "hard";
 /** Do ponto de vista do Eddy. */
 export type Outcome = "won" | "lost" | "draw";
@@ -11,8 +11,9 @@ export type Outcome = "won" | "lost" | "draw";
 export interface GameHost {
   /** O Eddy está pensando no lance (rosto em think). */
   thinking(on: boolean): void;
-  /** Um comentário curto da lista `pool` (g_took, f_hit, d_trap…). */
-  comment(pool: string): void;
+  /** Um comentário curto da lista `pool` (g_took, f_hit, d_trap…). `important` = fala
+   *  mesmo que ele já esteja falando (entra na fila, em vez de ser descartado). */
+  comment(pool: string, important?: boolean): void;
   end(outcome: Outcome): void;
   /** Efeitos de som da cena (soco, carta…). */
   sfx?(kind: "hit" | "heavy" | "block" | "card" | "ko"): void;

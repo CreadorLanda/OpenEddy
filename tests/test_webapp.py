@@ -326,9 +326,10 @@ class LimitesTest(WebServerTest):
             self.assertEqual(self.post("/api/web/route", {"text": "que horas são", "profile": perfil})[0], 200)
             self.assertEqual(self.post("/api/web/silence", {"profile": perfil, "final": True})[0], 200)
 
-    def test_os_limites_padrao_cobrem_as_tres_rotas_e_so_elas(self):
+    def test_os_limites_padrao_cobrem_as_rotas_certas_e_so_elas(self):
         padrao = webapp._limites()
-        self.assertEqual(set(padrao), {"/api/web/start", "/api/web/route", "/api/web/silence"})
+        self.assertEqual(set(padrao), {"/api/web/start", "/api/web/route", "/api/web/silence", "/api/web/make"})
+        self.assertIsNone(padrao["/api/web/make"][1], "o pedido de jogo não sai para fora")
         self.assertIsNone(padrao["/api/web/start"][1], "a resposta não sai para fora")
         self.assertIsNone(padrao["/api/web/silence"][1], "o silêncio não sai para fora")
         self.assertEqual(padrao["/api/web/route"][1].n, webapp.ROUTE_MAX)

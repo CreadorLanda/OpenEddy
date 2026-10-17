@@ -623,3 +623,34 @@ class ResetRouteTest(ServerTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+class MadeGameRouteTest(ServerTest):
+    def test_a_stored_game_opens_without_the_token_and_without_network(self):
+        status, body, _ = self.post("/api/eddy/game", {"html": "<html><script>1</script></html>"})
+        self.assertEqual(status, 200)
+        path = body["path"]
+        self.assertNotIn(TOKEN, path)
+        st, raw, headers = http(self.base, "GET", path, token=None)
+        self.assertEqual(st, 200)
+        self.assertIn(b"<script>1</script>", raw)
+        self.assertIn("default-src 'none'", headers["Content-Security-Policy"])
+        self.assertIn("sandbox allow-scripts", headers["Content-Security-Policy"])
+
+    def test_an_unknown_game_is_404_and_storing_needs_the_token(self):
+        st, _, _ = http(self.base, "GET", "/api/eddy/game/abcdefghijkl", token=None)
+        self.assertEqual(st, 404)
+        st, _, _ = self.post("/api/eddy/game", {"html": "<html></html>"}, token=None)
+        self.assertEqual(st, 401)
+
+    def test_make_streams_the_model_tokens(self):
+        def fake(_model, messages, on_token=None, **kw):
+            self.assertIn("torradas", messages[1]["content"])
+            self.assertEqual(kw["options"]["num_ctx"], 8192)
+            on_token("```html")
+            return {"content": "```html\n<html></html>\n```"}
+
+        with mock.patch.object(server.llm, "chat", side_effect=fake):
+            status, events, _ = self.post_sse("/api/eddy/make", {"idea": "torradas"})
+        self.assertEqual(status, 200)
+        self.assertEqual(events[0], {"type": "token", "token": "```html"})
+        self.assertEqual(events[-1]["type"], "done")

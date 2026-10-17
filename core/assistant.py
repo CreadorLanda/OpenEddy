@@ -249,7 +249,7 @@ def action_fallback(action: dict) -> str:
     """A fala de reserva (scenes.FALLBACK) de uma ação, se o modelo falhar."""
     if action.get("blocked"):
         return "a_blocked"
-    return {"image": "a_image", "theme": "a_theme", "game": "a_game"}[action["kind"]]
+    return {"image": "a_image", "theme": "a_theme", "game": "a_game", "make": "a_make"}[action["kind"]]
 
 
 class Eddy:

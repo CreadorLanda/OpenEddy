@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import actions  # noqa: E402
 import assistant  # noqa: E402
+import maker  # noqa: E402
 import scenes  # noqa: E402
 import eleven  # noqa: E402
 from config import DATA, ELEVEN_VOICE  # noqa: E402
@@ -48,6 +49,8 @@ LANDING_HOSTS = {h.strip() for h in os.environ.get("EDDY_LANDING_HOSTS", "opened
 
 # Puter AI: modelo rápido para conversa falada; o cliente cai no padrão do Puter se este falhar.
 CHAT_MODEL = os.environ.get("EDDY_WEB_MODEL", "gemini-3.5-flash-lite")
+# Modelo (Puter) que escreve os jogos que o Eddy cria; vazio = o mesmo da conversa.
+CODE_MODEL = os.environ.get("EDDY_WEB_CODE_MODEL", "") or CHAT_MODEL
 
 # Limites diários (a ElevenLabs é paga com a chave do dono do servidor).
 TTS_CHARS_USER = int(os.environ.get("EDDY_TTS_CHARS_PER_USER", "8000"))
@@ -78,6 +81,8 @@ ROUTE_BURST = float(os.environ.get("EDDY_ROUTE_BURST", "20"))
 ROUTE_REFILL = float(os.environ.get("EDDY_ROUTE_REFILL", "0.5"))
 SILENCE_BURST = float(os.environ.get("EDDY_SILENCE_BURST", "30"))
 SILENCE_REFILL = float(os.environ.get("EDDY_SILENCE_REFILL", "1"))
+MAKE_BURST = float(os.environ.get("EDDY_MAKE_BURST", "6"))
+MAKE_REFILL = float(os.environ.get("EDDY_MAKE_REFILL", "0.02"))
 # Quantos atalhos caros o servidor inteiro atende ao mesmo tempo (sem fila:
 # quem não entra recebe 503 em vez de ficar à espera).
 ROUTE_MAX = int(os.environ.get("EDDY_ROUTE_MAX", "8"))
@@ -95,6 +100,7 @@ def _limites():
         "/api/web/start": (RateLimit(START_BURST, START_REFILL), None),
         "/api/web/route": (RateLimit(ROUTE_BURST, ROUTE_REFILL), Semaforo(ROUTE_MAX)),
         "/api/web/silence": (RateLimit(SILENCE_BURST, SILENCE_REFILL), None),
+        "/api/web/make": (RateLimit(MAKE_BURST, MAKE_REFILL), None),
     }
 
 
@@ -362,6 +368,14 @@ def r_route(h, user, body):
     return {"text": out[0], **out[1]} if out else {"text": None}
 
 
+def r_make(h, user, body):
+    """O pedido para escrever (ou consertar) um jogo; quem chama o modelo é o
+    navegador, pelo Puter, na conta da pessoa."""
+    p = _profile(body)
+    fix = body.get("fix") if isinstance(body.get("fix"), dict) else None
+    return {"messages": maker.messages(str(body.get("idea", "")), p["idioma"], fix), "model": CODE_MODEL}
+
+
 def r_silence(h, user, body):
     seen = [str(x) for x in (body.get("seen") or [])][:40]
     return {"text": assistant.silence_line(_profile(body), bool(body.get("final")), seen)}
@@ -408,6 +422,7 @@ POST_ROUTES = {
     "/api/web/start": r_start,
     "/api/web/route": r_route,
     "/api/web/silence": r_silence,
+    "/api/web/make": r_make,
     "/api/web/tts": r_tts,
     "/api/web/stt-token": r_stt_token,
 }

@@ -98,6 +98,14 @@ export const Api = {
   /** `context` = o que está na tela (um jogo em andamento…), para o modelo saber. */
   turn: (text: string, onEvent: (ev: Record<string, unknown>) => void, context = "") => stream("/api/eddy/turn", { text, context }, onEvent),
   news: () => call<{ items: NewsItem[] }>("GET", "/api/news"),
+  /** O Eddy escreve (ou conserta) um jogo com o modelo local: tokens em streaming. */
+  make: (idea: string, fix: { code: string; error: string } | undefined, onEvent: (ev: Record<string, unknown>) => void) =>
+    stream("/api/eddy/make", { idea, fix }, onEvent),
+  /** Guarda o jogo no núcleo e devolve o endereço completo dele (para o iframe). */
+  async hostGame(html: string): Promise<string> {
+    const r = await call<{ path: string }>("POST", "/api/eddy/game", { html });
+    return (await backendInfo()).url + r.path;
+  },
   /** Fala em streaming: devolve a resposta crua (PCM da ElevenLabs ou WAV do Kokoro). */
   async ttsStream(text: string, voice?: string, signal?: AbortSignal): Promise<Response> {
     const b = await backendInfo();

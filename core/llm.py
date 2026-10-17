@@ -81,7 +81,7 @@ def warm_up(name: str):
         pass
 
 
-def chat(model, messages, tools=None, on_token=None, should_stop=None, timeout=600):
+def chat(model, messages, tools=None, on_token=None, should_stop=None, timeout=600, options=None):
     """Chama /api/chat em streaming.
 
     Devolve {"content": str, "tool_calls": [...]} — os tokens de texto vão
@@ -92,6 +92,8 @@ def chat(model, messages, tools=None, on_token=None, should_stop=None, timeout=6
             "keep_alive": "30m"}
     if tools:
         body["tools"] = tools
+    if options:
+        body["options"] = options
     req = urllib.request.Request(
         f"{OLLAMA_URL}/api/chat",
         data=json.dumps(body).encode(),

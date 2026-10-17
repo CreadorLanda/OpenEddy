@@ -121,3 +121,33 @@ class WebRouteActionTest(WebServerTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MakeTest(unittest.TestCase):
+    def test_make_requests_carry_the_idea_and_win_over_opening_a_board(self):
+        self.assertEqual(actions.detect("cria um jogo de pegar torradas caindo", "pt"),
+                         {"kind": "make", "idea": "pegar torradas caindo"})
+        self.assertEqual(actions.detect("cria um jogo de xadrez", "pt"), {"kind": "make", "idea": "xadrez"})
+        self.assertEqual(actions.detect("faz um jogo", "pt"), {"kind": "make", "idea": ""})
+        self.assertEqual(actions.detect("make me a game about dodging toasters", "en"),
+                         {"kind": "make", "idea": "dodging toasters"})
+        self.assertIsNone(actions.detect("esse jogo é chato", "pt"))
+
+    def test_the_code_prompt_has_the_rules_and_the_fix_round(self):
+        import maker
+        m = maker.messages("pegar torradas", "en")
+        self.assertIn("English", m[0]["content"])
+        self.assertIn("var(--ink)", m[0]["content"])
+        self.assertIn("eddyGame: 'over'", m[0]["content"])
+        self.assertIn("pegar torradas", m[1]["content"])
+        fixed = maker.messages("x", "pt", {"code": "<html>…</html>", "error": "foo is not defined"})
+        self.assertEqual([x["role"] for x in fixed], ["system", "user", "assistant", "user"])
+        self.assertIn("foo is not defined", fixed[-1]["content"])
+        self.assertTrue(maker.messages("", "pt")[1]["content"].strip().endswith(")"))  # ideia vaga: ele escolhe
+
+
+class WebMakeTest(WebServerTest):
+    def test_the_make_route_gives_the_browser_the_prompt_and_the_model(self):
+        _, body, _ = self.post("/api/web/make", {"idea": "cobrinha", "profile": {"idioma": "es"}})
+        self.assertIn("español", body["messages"][0]["content"])
+        self.assertTrue(body["model"])

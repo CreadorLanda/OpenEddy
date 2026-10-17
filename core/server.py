@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import events  # noqa: E402
 import llm  # noqa: E402
+import maker  # noqa: E402
 import scenes  # noqa: E402
 import voice  # noqa: E402
 import web  # noqa: E402
@@ -114,6 +115,14 @@ class Api(BaseHTTPRequestHandler):
     def _dispatch(self, method):
         url = urlparse(self.path)
         query = parse_qs(url.query)
+        # A página de um jogo criado abre num iframe: o id aleatório dela é a chave,
+        # e o token da sessão nunca vai para uma URL que o jogo consiga ler.
+        game = re.fullmatch(r"/api/eddy/game/([\w-]{12})", url.path) if method == "GET" else None
+        if game:
+            try:
+                return game_page(self, game.group(1))
+            except KeyError:
+                return self._json({"error": "jogo não encontrado"}, 404)
         if not self._authorized(query):
             return self._json({"error": "não autorizado"}, 401)
         for m, pattern, fn in ROUTES:
@@ -191,6 +200,56 @@ def eddy_turn(h):
         pass
     except Exception as e:
         h._sse({"type": "error", "error": str(e)})
+
+
+# ── o Eddy cria jogos ──────────────────────────────────────────────────────────
+
+GAMES: dict[str, str] = {}  # id → html, só na memória desta sessão
+GAME_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+            "img-src data: blob:; font-src data:; media-src data: blob:")
+
+
+def eddy_make(h):
+    """Escreve (ou conserta) um jogo com o modelo local, em streaming de tokens."""
+    body = h._body()
+    fix = body.get("fix") if isinstance(body.get("fix"), dict) else None
+    messages = maker.messages(str(body.get("idea", "")), eddy.lang, fix)
+    h._sse_start()
+    try:
+        out = llm.chat(llm.model(), messages, on_token=lambda t: h._sse({"type": "token", "token": t}),
+                       options={"num_ctx": 8192, "num_predict": 6000})
+        h._sse({"type": "done", "text": out["content"]})
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+    except Exception as e:
+        h._sse({"type": "error", "error": str(e)})
+
+
+def game_store(h):
+    """Guarda o jogo e devolve o endereço dele: o iframe abre de outra origem, com
+    o próprio CSP (sem rede), em vez de herdar o CSP do app."""
+    html = str(h._body().get("html", ""))
+    if not html or len(html) > 400_000:
+        raise ValueError("jogo vazio ou grande demais")
+    gid = secrets.token_urlsafe(9)
+    GAMES[gid] = html
+    while len(GAMES) > 20:
+        GAMES.pop(next(iter(GAMES)))
+    return {"path": f"/api/eddy/game/{gid}"}
+
+
+def game_page(h, gid):
+    html = GAMES.get(gid)
+    if html is None:
+        raise KeyError("jogo não encontrado")
+    body = html.encode()
+    h.send_response(200)
+    h.send_header("Content-Type", "text/html; charset=utf-8")
+    h.send_header("Content-Security-Policy", GAME_CSP + "; sandbox allow-scripts")
+    h.send_header("Content-Length", str(len(body)))
+    h.send_header("Cache-Control", "no-store")
+    h.end_headers()
+    h.wfile.write(body)
 
 
 def eddy_config(h):
@@ -327,6 +386,8 @@ ROUTES = [
     ("POST", r"/api/eddy/memory/add", memory_add),
     ("DELETE", r"/api/eddy/memory/(\d+)", memory_delete),
     ("POST", r"/api/eddy/memory/clear", memory_clear),
+    ("POST", r"/api/eddy/make", eddy_make),
+    ("POST", r"/api/eddy/game", game_store),
     ("POST", r"/api/eddy/config", eddy_config),
     ("POST", r"/api/eddy/reset", eddy_reset),
     ("POST", r"/api/eddy/profile", eddy_profile),

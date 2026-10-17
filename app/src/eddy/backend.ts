@@ -27,7 +27,8 @@ export type SceneKind =
 export type Action =
   | { kind: "image"; query: string; blocked?: boolean }
   | { kind: "theme"; to: "classic" | "holo" | "toggle" }
-  | { kind: "game"; game: "chess" | "checkers" | "fight" | "duel" };
+  | { kind: "game"; game: "chess" | "checkers" | "fight" | "duel" }
+  | { kind: "make"; idea: string };
 
 export interface TurnOptions {
   /** Chamado assim que a ação é reconhecida, antes do modelo responder. */
@@ -69,6 +70,10 @@ export interface Backend {
   scenes(p: Profile): Promise<SceneBundle>;
   /** Fala de uma cena sem fala da pessoa (ligar de volta, voltar do gelo…). */
   sceneLine(kind: SceneKind, p: Profile): Promise<string>;
+  /** O Eddy escreve (ou conserta, com `fix`) um jogo; devolve a resposta inteira do modelo. */
+  makeGame(idea: string, p: Profile, onToken: (t: string) => void, fix?: { code: string; error: string }): Promise<string>;
+  /** Onde o jogo roda: um endereço (PC, outra origem) ou null (web: iframe com srcdoc). */
+  hostGame(html: string): Promise<string | null>;
 }
 
 /** Fala de reserva de uma cena, ou de uma das listas curtas (g_took, img_none…). */
@@ -109,6 +114,16 @@ const desktop: Backend = {
     return (await Api.callSilence(final)).text;
   },
   scenes: () => Api.scenes(),
+  async makeGame(idea, _p, onToken, fix) {
+    let text = "";
+    await Api.make(idea, fix, (ev) => {
+      if (ev.type === "token") onToken(String(ev.token));
+      else if (ev.type === "done") text = String(ev.text ?? "");
+      else if (ev.type === "error") throw new Error(String(ev.error));
+    });
+    return text;
+  },
+  hostGame: (html) => Api.hostGame(html),
   async sceneLine(kind) {
     return (await Api.scene(kind)).text;
   },
@@ -257,6 +272,29 @@ const web: Backend = {
   },
   async scenes() {
     return sceneData ?? { directions: {}, fallback: {} };
+  },
+  async makeGame(idea, p, onToken, fix) {
+    const r = await post<{ messages: { role: string; content: string }[]; model: string }>("/api/web/make", { idea, profile: p, fix });
+    const run = async (m: string) => {
+      const stream = await puter().ai.chat(r.messages, m ? { model: m, stream: true } : { stream: true });
+      let full = "";
+      for await (const part of stream) {
+        if (part.type === "error") throw new Error(part.message ?? "erro no Puter AI");
+        if (part.text) {
+          full += part.text;
+          onToken(part.text);
+        }
+      }
+      return full;
+    };
+    try {
+      return await run(r.model);
+    } catch {
+      return run(""); // modelo indisponível: o padrão do Puter
+    }
+  },
+  async hostGame() {
+    return null;
   },
   async sceneLine(kind) {
     if (kind === "hold" || kind === "hold_back" || !sceneData?.directions[kind]) return sceneFallback(sceneData, kind);

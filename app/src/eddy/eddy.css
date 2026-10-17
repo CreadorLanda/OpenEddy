@@ -392,3 +392,22 @@ body.classic .duel-info .backs i { border-color: #111; background: repeating-lin
 body.classic .duel-info .turn-dot { color: #b3261e; }
 body.classic .duel-mid { border-color: #111; }
 body.classic .duel-buttons .hint { color: #555; }
+
+/* ── jogo criado pelo Eddy ── */
+.made-body { position: relative; }
+.made-frame { display: block; width: 100%; aspect-ratio: 16 / 10; border: 2px solid rgba(110, 228, 255, .45); border-radius: 8px; background: #04080c; }
+.coding { aspect-ratio: 16 / 10; display: flex; flex-direction: column; border: 2px solid rgba(110, 228, 255, .45); border-radius: 8px; background: rgba(2, 8, 12, .92); padding: 10px 12px; overflow: hidden; }
+.code-stream { flex: 1; margin: 0; overflow: hidden; white-space: pre-wrap; word-break: break-all; font: 11px/1.45 var(--mono); color: #6ee4ff; background: none; border: 0; padding: 0; display: flex; flex-direction: column; justify-content: flex-end; }
+.code-stream::after { content: "▌"; animation: dot 1s steps(1) infinite; }
+.coding-status { margin: 8px 0 0; color: #9fc6d4; font-size: 13px; }
+.coding .fine { margin: 4px 0 0; }
+.coding.failed { align-items: center; justify-content: center; gap: 12px; color: #dff8ff; }
+.coding.failed p { margin: 0; }
+body.classic .made-frame, body.classic .coding { border-color: #111; box-shadow: 5px 5px 0 #111; }
+body.classic .made-frame { background: #fff; }
+body.classic .coding { background: #fff; }
+body.classic .code-stream { color: #111; }
+body.classic .coding-status, body.classic .coding.failed { color: #333; }
+.panel-head b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.panel-head .who { white-space: nowrap; }
+@media (max-width: 560px) { .panel-head .who { display: none; } }

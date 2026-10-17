@@ -12,6 +12,7 @@ import { EddyFace, faceTheme, setFaceTheme, type FaceState, type FaceTheme } fro
 import { Ringer } from "./ring";
 import { B, LINKS, sceneFallback, type Action, type SceneKind } from "./backend";
 import { createGame, type GameHost, type GameKind, type GameSession } from "./games";
+import { MadeGame } from "./games/maker";
 import { galleryPanel, searchImages, type Pic } from "./images";
 import { memoryPanel } from "./memory";
 import { caption, readPcm, SpeechQueue, voiceText, splitAtTags } from "./speech";
@@ -658,6 +659,7 @@ function inCallScreen() {
     h("button", { type: "button", onclick: () => (gamesMenu.classList.remove("open"), openGame("checkers", true)) }, "⛂\uFE0E Damas"),
     h("button", { type: "button", onclick: () => (gamesMenu.classList.remove("open"), openGame("fight", true)) }, "👊 Luta"),
     h("button", { type: "button", onclick: () => (gamesMenu.classList.remove("open"), openGame("duel", true)) }, "🃏 Duelo"),
+    h("button", { type: "button", title: "Ou peça: “cria um jogo de…”", onclick: () => (gamesMenu.classList.remove("open"), openMade(""), interject(sceneFallback(scenes, "a_make"))) }, "🛠 Ele cria um"),
   );
   const gamesBtn = h("button", { class: "round", title: "Jogar com o Eddy", html: KNIGHT, onclick: () => gamesMenu.classList.toggle("open") });
   const themeBtn = h("button", { class: "round", title: "Trocar o visual do Eddy", html: CONTRAST, onclick: () => {
@@ -728,8 +730,8 @@ const gameHost: GameHost = {
     if (!call.face || speech.speaking) return;
     call.face.state = on ? "think" : call.listening ? "listen" : "idle";
   },
-  comment(pool) {
-    if (speech.speaking || call.interject.length) return; // não amontoa falas
+  comment(pool, important) {
+    if (!important && (speech.speaking || call.interject.length)) return; // não amontoa falas
     interject(sceneFallback(scenes, pool));
   },
   sfx(kind) {
@@ -749,13 +751,29 @@ const gameHost: GameHost = {
   },
 };
 
-const START_POOL: Record<GameKind, string> = { chess: "g_start", checkers: "g_start", fight: "f_start", duel: "d_start" };
+const START_POOL: Record<Exclude<GameKind, "made">, string> = { chess: "g_start", checkers: "g_start", fight: "f_start", duel: "d_start" };
 
-function openGame(kind: GameKind, announce: boolean) {
+function openGame(kind: Exclude<GameKind, "made">, announce: boolean) {
+  mountGame(createGame(kind, gameHost), announce ? START_POOL[kind] : null);
+}
+
+/** O Eddy programa um jogo na hora e ele roda no painel. */
+function openMade(idea: string) {
+  mountGame(
+    new MadeGame(idea, gameHost, {
+      make: (i, onToken, fix) => B.makeGame(i, profile!, onToken, fix),
+      host: (html) => B.hostGame(html),
+      theme: faceTheme,
+      slow: !B.web,
+    }),
+    null,
+  );
+}
+
+function mountGame(g: GameSession, pool: string | null) {
   if (!call.area) return;
   call.game?.el.remove();
   call.game?.close();
-  const g = createGame(kind, gameHost);
   call.game = g;
   g.el.querySelector(".panel-head")!.append(h("button", { type: "button", class: "ghost", title: "Sair do jogo", onclick: () => closeGame(true) }, "×"));
   call.area.prepend(g.el);
@@ -763,7 +781,7 @@ function openGame(kind: GameKind, announce: boolean) {
   // microfone pausado: ninguém fala por cima do lance, e o Scribe não fica aberto à toa
   call.setMuted(true);
   setStatus("Sua vez. Microfone pausado no jogo — toque no 🎤 para falar com ele.");
-  if (announce) interject(sceneFallback(scenes, START_POOL[kind]));
+  if (pool) interject(sceneFallback(scenes, pool));
 }
 
 function closeGame(byUser: boolean) {
@@ -822,6 +840,7 @@ async function showImages(q: string) {
 
 function doAction(a: Action) {
   if (a.kind === "game") openGame(a.game, false);
+  else if (a.kind === "make") openMade(a.idea);
   else if (a.kind === "theme") setTheme(a.to);
   else if (a.kind === "image" && !a.blocked) void showImages(a.query);
 }

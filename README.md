@@ -29,6 +29,7 @@ Open Eddy is a voice AI shaped like a phone call. You sign in, tell Eddy your na
 - **Languages** — Portuguese (default in the app), English, Spanish.
 - **Shows you things** — “show me a capybara in a hat”: he searches free images (Openverse, Creative Commons, mature content filtered) and puts them on screen, with credits.
 - **Plays with you (badly for you)** — on the call, by voice or the ♞ button: chess, checkers (Brazilian rules), a 2D fight (stick figures in his own line style, best of 3, bionic super strength) and a card duel with original cards from Eddy's world (Wi-Fi toaster, possessed printer, Supreme Eddy…). Three levels, from “Easy” to “Max ego”; he trash-talks, and loses like a true sore loser.
+- **Makes games for you** — “make me a game about dodging toasters”: you watch him code it live, then it runs right there in the call, sandboxed (no network, no access to your account or the app). If it crashes at once he fixes it himself; you can download the `.html`. Best on the web (Puter models); on a CPU the local model is slow.
 - **Two looks** — the blue hologram, or the classic Eddy from the show: black lines on white. “Turn white” / “go back to the hologram”, or the ◐ button.
 
 ### Scenes (he takes over the call)
@@ -94,6 +95,7 @@ ELEVENLABS_API_KEY=... EDDY_WEB_HOST=0.0.0.0 EDDY_WEB_PORT=8120 python3 core/web
 | `EDDY_TTS_CHARS_PER_USER` / `EDDY_TTS_CHARS_TOTAL` | `8000` / `60000` | daily voice budget (after that, the browser's own voice takes over) |
 | `EDDY_UNLIMITED_USERS` | — | Puter usernames with no limit (e.g. the server owner) |
 | `EDDY_STT_PER_USER` | `150` | daily mic sessions per user |
+| `EDDY_WEB_CODE_MODEL` | chat model | Puter model that writes the games Eddy makes |
 | `EDDY_START_BURST` / `EDDY_START_REFILL` | `10` / `0.2` | per-user bucket for `/api/web/start`: requests kept, and requests per second |
 | `EDDY_ROUTE_BURST` / `EDDY_ROUTE_REFILL` | `20` / `0.5` | the same for `/api/web/route`, the one that reads the news |
 | `EDDY_SILENCE_BURST` / `EDDY_SILENCE_REFILL` | `30` / `1` | the same for `/api/web/silence` |

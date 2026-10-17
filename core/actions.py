@@ -118,11 +118,34 @@ def game_wanted(text: str, lang: str) -> str | None:
     return None
 
 
+# ── criar jogos ───────────────────────────────────────────────────────────────
+
+_MAKE = {
+    "pt": r"\b(?:cri[ae]\w*|faz|fa[çc]a|fazer|invent[ae]\w*|programa|program[ae]r|monta|desenvolv\w*)\s+(?:um|uma|o|a)?\s*(?:novo\s+)?(?:jogo|joguinho|game)\b(?:\s+(?:de|do|da|sobre|com|onde|em\s+que|que))?\s*(?P<idea>.*)",
+    "en": r"\b(?:make|create|build|code|program|invent|design)\s+(?:me\s+)?(?:a|an|the)?\s*(?:new\s+)?(?:game|mini-?game)\b(?:\s+(?:about|of|with|where|that|like))?\s*(?P<idea>.*)",
+    "es": r"\b(?:crea|cr[ée]ame|haz|hazme|hacer|inventa|programa)\s+(?:un|una|el)?\s*(?:nuevo\s+)?(?:juego|jueguito)\b(?:\s+(?:de|sobre|con|donde|que))?\s*(?P<idea>.*)",
+}
+
+
+def make_idea(text: str, lang: str) -> str | None:
+    """'cria um jogo de pegar torradas' → 'pegar torradas' (ou '' se não disse de quê)."""
+    t = " ".join(text.lower().split()).strip(" ?!.,;")
+    m = re.search(_MAKE.get(lang, _MAKE["pt"]), t)
+    if not m:
+        return None
+    idea = re.sub(_TAIL, "", m.group("idea")).strip(" ?!.,;")
+    return idea[:160]
+
+
 # ── juntando ──────────────────────────────────────────────────────────────────
 
 def detect(text: str, lang: str) -> dict | None:
     """Uma ação pedida nesta fala, ou None. Jogo e visual antes de imagem:
-    "mostra o xadrez" é jogo, "fica branco" não é foto."""
+    "mostra o xadrez" é jogo, "fica branco" não é foto. Criar vem antes de tudo:
+    "cria um jogo de xadrez" é para ele programar, não para abrir o tabuleiro."""
+    idea = make_idea(text, lang)
+    if idea is not None:
+        return {"kind": "make", "idea": idea}
     game = game_wanted(text, lang)
     if game:
         return {"kind": "game", "game": game}
@@ -156,6 +179,12 @@ def note(action: dict) -> str:
               "holo": "o holograma azul de sempre"}.get(action.get("to"), "um visual novo")
         d = (f"A pessoa pediu para você mudar de visual e você acabou de mudar para {to}. "
              "Comente, convencido, que fica lindo de qualquer jeito. 1 frase curta.")
+    elif kind == "make":
+        o_que = action.get("idea") or "um jogo à sua escolha"
+        d = (f"A pessoa pediu para você CRIAR um jogo: “{o_que}”. Você vai programar agora — na tela "
+             "dela aparece você programando, e o jogo só fica pronto daqui a pouco. Diga com arrogância "
+             "que vai criar uma obra-prima em segundos (se a ideia veio vaga, diga o que você decidiu "
+             "fazer). NÃO diga que já está pronto. NÃO fale de código. 1 frase curta.")
     elif kind == "game":
         jogo = _GAMES.get(action.get("game"), "xadrez")
         d = (f"A pessoa te desafiou para uma partida de {jogo}. O jogo já está na tela e ela começa. "

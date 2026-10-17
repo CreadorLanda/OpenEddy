@@ -12,8 +12,8 @@
   "app": {
     "withGlobalTauri": false,
     "security": {
-      "csp": "default-src 'self'; script-src 'self' https://js.puter.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob:; frame-src https://*.puter.com https://puter.com; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* https://api.openverse.org https://*.puter.com https://puter.com wss://*.puter.com",
-      "devCsp": "default-src 'self'; script-src 'self' https://js.puter.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob:; frame-src https://*.puter.com https://puter.com; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* https://api.openverse.org https://*.puter.com https://puter.com wss://*.puter.com ws://127.0.0.1:1430"
+      "csp": "default-src 'self'; script-src 'self' https://js.puter.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob:; frame-src http://127.0.0.1:* https://*.puter.com https://puter.com; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* https://api.openverse.org https://*.puter.com https://puter.com wss://*.puter.com",
+      "devCsp": "default-src 'self'; script-src 'self' https://js.puter.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob:; frame-src http://127.0.0.1:* https://*.puter.com https://puter.com; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* https://api.openverse.org https://*.puter.com https://puter.com wss://*.puter.com ws://127.0.0.1:1430"
     },
     "windows": []
   },

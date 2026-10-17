@@ -21,7 +21,7 @@ export type { GameHost, GameKind, GameSession, Level, Outcome } from "./common";
 type BoardKind = "chess" | "checkers";
 
 /** Abre o jogo pedido. */
-export function createGame(kind: GameKind, host: GameHost): GameSession {
+export function createGame(kind: Exclude<GameKind, "made">, host: GameHost): GameSession {
   if (kind === "fight") return new FightGame(host);
   if (kind === "duel") return new DuelGame(host);
   return new GameView(kind, host);
