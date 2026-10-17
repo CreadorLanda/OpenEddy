@@ -199,6 +199,42 @@ class EddyCallTest(unittest.TestCase):
         self.assertEqual(self.eddy.history, [])
         self.assertTrue(resposta.get("stale"), resposta)
 
+    def test_a_turn_queued_behind_the_lock_still_belongs_to_its_own_call(self):
+        """O turno foi pedido na chamada velha mas só consegue o lock depois de a
+        pessoa já ter ligado outra vez: pertence à chamada do pedido, não à que o
+        lock encontrou."""
+        trocou = threading.Event()
+
+        class LockQueTrocaDeChamada:
+            """O lock do Eddy, mas que abre uma chamada nova no instante em que o
+            turno o adquire — é a troca a meio da espera, sem sleeps nem threads."""
+
+            def __init__(self, ao_adquirir):
+                self._interno = threading.Lock()
+                self.ao_adquirir = ao_adquirir
+
+            def __enter__(self):
+                self._interno.acquire()
+                self.ao_adquirir()
+                return self
+
+            def __exit__(self, *_):
+                self._interno.release()
+
+        def nova_chamada():
+            if not trocou.is_set():
+                trocou.set()
+                with mock.patch.object(llm, "warm_up"):
+                    self.eddy.start_call()
+
+        self.eddy.lock = LockQueTrocaDeChamada(nova_chamada)
+        with mock.patch.object(llm, "chat", return_value={"content": "resposta da chamada velha"}):
+            resposta = self.eddy.turn("pergunta da chamada velha", lambda t: None)
+
+        self.assertTrue(trocou.is_set(), "a troca de chamada não aconteceu: o teste não provaria nada")
+        self.assertTrue(resposta.get("stale"), resposta)
+        self.assertEqual(self.eddy.history, [])
+
     def test_a_superseded_turn_stops_reading_from_the_model(self):
         """`llm.chat` já sabia parar de ler; agora recebe o should_stop da chamada."""
         parados = []

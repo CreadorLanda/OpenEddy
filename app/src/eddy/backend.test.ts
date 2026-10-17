@@ -3,22 +3,41 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // O backend da web guarda a conversa no navegador (o servidor é sem estado) e o
 // turno passa pelo Puter AI, que pode responder muito depois de a pessoa ter
 // desligado. Aqui o `fetch` e o Puter são dublês e a espera é feita com barreiras
-// explícitas, nunca com tempos a dormir.
+// explícitas: o dublê avisa quando o pedido chegou e só responde quando o teste
+// deixa. Nada de sleeps.
 
 const perfil = { nome: "Zeca", idade: 30, sexo: "masculino" as const, idioma: "pt" as const };
 
-/** `travar("x")` segura o que usar a chave "x" até a função devolvida ser chamada. */
-const barreiras = new Map<string, { espera: Promise<void>; abrir: () => void }>();
+interface Barreira {
+  /** Resolve quando alguém chama `abrir()`. */
+  espera: Promise<void>;
+  abrir: () => void;
+}
 
-function travar(chave: string): () => void {
+function barreira(): Barreira {
   let abrir = () => {};
   const espera = new Promise<void>((r) => (abrir = r));
-  barreiras.set(chave, { espera, abrir });
-  return abrir;
+  return { espera, abrir };
+}
+
+/** Segura a resposta a `chave` (`travar`) e/ou avisa a chegada de `path`. */
+const retenções = new Map<string, Promise<void>>();
+const chegadas = new Map<string, Barreira>();
+
+function travar(chave: string): Barreira {
+  const b = barreira();
+  retenções.set(chave, b.espera);
+  return b;
+}
+
+function avisar(chave: string): Barreira {
+  const b = barreira();
+  chegadas.set(chave, b);
+  return b;
 }
 
 function esperar(chave: string): Promise<void> {
-  return barreiras.get(chave)?.espera ?? Promise.resolve();
+  return retenções.get(chave) ?? Promise.resolve();
 }
 
 interface Pedido {
@@ -43,18 +62,20 @@ async function fetchDublê(entrada: string, init: RequestInit): Promise<Response
   const path = entrada.replace(/^https?:\/\/[^/]+/, "");
   const body = init.body ? JSON.parse(String(init.body)) : {};
   pedidos.push({ path, body });
-  await esperar(`rota:${path}`);
+  chegadas.get(path)?.abrir(); // o teste sabe agora que o pedido chegou
+  await esperar(`rota:${path}`); // e segura a resposta se alguém pediu
   return responder(respostaDe(path));
 }
 
-/** Um Puter AI cujo `chat` espera pela barreira "puter" antes de responder. */
+/** Um Puter AI dublê: guarda as mensagens e espera pela barreira "puter". */
 function puterDublê(respostas: string[]) {
   const chamadas: { role: string; content: string }[][] = [];
   const chat = vi.fn(async (messages: { role: string; content: string }[]) => {
     chamadas.push(messages);
     const resposta = respostas[chamadas.length - 1] ?? "resposta";
     return (async function* () {
-      await esperar("puter");
+      chegadas.get("puter")?.abrir(); // o turno chegou ao Puter
+      await esperar("puter"); // e só responde quando o teste deixa
       yield { text: resposta };
     })();
   });
@@ -67,7 +88,8 @@ let B: typeof import("./backend").B;
 beforeEach(async () => {
   pedidos = [];
   silencios = 0;
-  barreiras.clear();
+  retenções.clear();
+  chegadas.clear();
   (globalThis as Record<string, unknown>).window = globalThis;
   Object.defineProperty(globalThis, "location", { configurable: true, value: { search: "" } });
   Object.defineProperty(globalThis, "navigator", {
@@ -87,11 +109,12 @@ describe("a conversa da web não herda da chamada anterior", () => {
     const chamadas = puterDublê(["resposta velha", "resposta nova"]);
     await B.callStart(perfil);
 
-    const abrir = travar("puter");
+    const chegou = avisar("puter");
+    const retido = travar("puter");
     const velha = B.turn("pergunta velha", perfil, () => {});
-    await new Promise((r) => setTimeout(r, 0)); // o turno velho já chegou ao Puter
+    await chegou.espera; // o turno velho já está dentro do Puter AI
     await B.callStart(perfil); // a pessoa desliga e liga outra vez
-    abrir();
+    retido.abrir();
     await velha;
 
     await B.turn("pergunta nova", perfil, () => {});
@@ -123,11 +146,12 @@ describe("a conversa da web não herda da chamada anterior", () => {
   it("uma fala de silêncio de outra chamada não entra na lista de vistas", async () => {
     puterDublê([]);
     await B.callStart(perfil);
-    const abrir = travar("rota:/api/web/silence");
+    const chegou = avisar("/api/web/silence");
+    const retido = travar("rota:/api/web/silence");
     const velha = B.silence(perfil, false);
-    await new Promise((r) => setTimeout(r, 0));
+    await chegou.espera; // o pedido de silêncio já chegou ao servidor
     await B.callStart(perfil); // chamada nova a meio
-    abrir();
+    retido.abrir();
     await velha;
 
     await B.silence(perfil, false);

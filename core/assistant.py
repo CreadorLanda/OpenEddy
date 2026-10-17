@@ -302,12 +302,18 @@ class Eddy:
     def turn(self, text, on_token):
         """Uma fala da pessoa na ligação. Devolve {text, ...extras}.
 
-        Se a pessoa desligar (ou ligar outra vez) enquanto o Eddy pensa, o turno
-        devolve `stale` e não escreve nada: a resposta é de uma chamada que já
-        acabou, e escrevê-la contaminaria a conversa da chamada nova.
+        O turno pertence à chamada em que foi pedido — não à que estiver valendo
+        quando conseguir o lock. `start_call` não adquire o lock (uma chamada nova
+        nunca fica à espera de um turno velho), por isso ler a geração só lá dentro
+        deixaria um turno à espera escrever na conversa da chamada seguinte.
+
+        Quando a chamada já não é a sua, devolve `stale` e não escreve nada: a
+        resposta é de uma chamada que já acabou.
         """
+        call = self.call  # a chamada no momento do pedido, antes de esperar o lock
         with self.lock:
-            call = self.call  # a chamada a que este turno pertence
+            if self.call != call:
+                return {"text": "", "stale": True}  # trocou-se de chamada enquanto esperava
             routed = self._route(text)
             if routed:
                 answer, extra = routed
