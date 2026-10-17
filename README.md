@@ -101,6 +101,8 @@ npm run build --prefix app                              # tsc --noEmit + vite bu
 
 No credentials, no paid services, no live infrastructure. The Puter identity, the ElevenLabs key, the Scribe WebSocket, the microphone and the browser audio are all dublês, and the Python suite points `XDG_DATA_HOME` at a temporary folder so a test run never touches your real data.
 
+The app itself runs on Node 20, but **vitest 5 needs Node 22.12 or newer** to run the app suite — that is what CI uses. On Node 20 `npm ci` warns `EBADENGINE` and the tests happen to pass, but you are outside the supported range.
+
 What is covered: turn cancellation and stale answers (a reply that arrives after you interrupt is dropped), TTS playback cancellation and the browser-voice fallback, the STT turn lifecycle (token, partials, VAD timeout, cancel, socket failure), the desktop STT fallback to Whisper and the microphone lock, the face's tag-to-expression mapping, the web API (auth, validation, quotas, 429/502/503), the desktop API (session token, SSE turns), and the persona's profile cleaning, shortcuts and per-call reset.
 
 CI runs both suites plus the build on every pull request (`.github/workflows/ci.yml`).
