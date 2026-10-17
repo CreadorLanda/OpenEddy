@@ -255,6 +255,10 @@ class Eddy:
         self.history: list[dict] = []
         self.seen: list[str] = []  # falas de silêncio já usadas nesta ligação
         self.lock = threading.Lock()
+        # `publish` é o lock curto da conversa: segura a geração, a publicação de
+        # um token e a escrita no historial. Sem ele, um turno podia decidir que a
+        # chamada ainda é sua, a pessoa ligar nesse meio e o token sair na mesma.
+        self.publish = threading.Lock()
         self._calls = itertools.count(1)  # next() não cede o meio: duas ligações não trocam a geração
         self.call = next(self._calls)
 
@@ -267,9 +271,11 @@ class Eddy:
         return self.settings()
 
     def set_profile(self, data):
-        self.call = next(self._calls)  # o perfil novo zera a conversa: o que ficou a pensar é antigo
-        self.profile = clean_profile(data)
-        self.history = []
+        profile = clean_profile(data)
+        with self.publish:
+            self.call = next(self._calls)  # o perfil novo zera a conversa: o que ficou a pensar é antigo
+            self.profile = profile
+            self.history = []
         return self.settings()
 
     @property
@@ -278,9 +284,10 @@ class Eddy:
 
     def start_call(self):
         """Nova ligação: zera a conversa, já carrega o modelo e devolve o 'alô'."""
-        self.call = next(self._calls)  # tudo o que ficou a pensar agora é resposta velha
-        self.history = []
-        self.seen = []
+        with self.publish:
+            self.call = next(self._calls)  # tudo o que ficou a pensar agora é resposta velha
+            self.history = []
+            self.seen = []
         threading.Thread(target=llm.warm_up, args=(llm.model(),), daemon=True).start()
         return greeting(self.profile)
 
@@ -299,6 +306,26 @@ class Eddy:
             return "Voltei pra minha voz original. A perfeita.", {"settings": self.settings()}
         return route(text, self.profile)
 
+    def _publicar(self, call, on_token):
+        """O `on_token` deste turno: só anuncia se a chamada ainda for a dele.
+
+        Verificar e publicar no mesmo lock é o que garante que nada da chamada
+        antiga sai depois de a nova começar — a verificação por fragmento do
+        `llm.chat` só corre no início de cada linha, e a pessoa pode ligar nesse
+        meio. O lock abrange uma escrita no socket, nunca o modelo, por isso uma
+        chamada nova não fica à espera do Eddy pensar.
+
+        Um token recusado é o sinal de que a chamada mudou, e o `should_stop` que
+        o `llm.chat` avalia no fragmento seguinte larga o laço.
+        """
+
+        def publicar(tok):
+            with self.publish:
+                if self.call == call:
+                    on_token(tok)
+
+        return publicar
+
     def turn(self, text, on_token):
         """Uma fala da pessoa na ligação. Devolve {text, ...extras}.
 
@@ -311,24 +338,25 @@ class Eddy:
         resposta é de uma chamada que já acabou.
         """
         call = self.call  # a chamada no momento do pedido, antes de esperar o lock
+        publicar = self._publicar(call, on_token)
         with self.lock:
             if self.call != call:
                 return {"text": "", "stale": True}  # trocou-se de chamada enquanto esperava
             routed = self._route(text)
             if routed:
                 answer, extra = routed
-                if self.call == call:
-                    on_token(answer)  # só anuncia se a chamada ainda for esta
+                publicar(answer)
             else:
                 messages = ([{"role": "system", "content": system_prompt(self.profile)}]
                             + self.history[-12:] + [{"role": "user", "content": text}])
-                answer = llm.chat(llm.model(), messages, on_token=on_token,
+                answer = llm.chat(llm.model(), messages, on_token=publicar,
                                   should_stop=lambda: self.call != call)["content"]
                 answer = re.sub(r"(?s)<think>.*?</think>", "", answer).strip()
                 extra = {}
-            if self.call != call:
-                return {"text": "", "stale": True}
-            self.history += [{"role": "user", "content": text},
-                             {"role": "assistant", "content": answer}]
-            self.history = self.history[-24:]
+            with self.publish:
+                if self.call != call:
+                    return {"text": "", "stale": True}
+                self.history += [{"role": "user", "content": text},
+                                 {"role": "assistant", "content": answer}]
+                self.history = self.history[-24:]
             return {"text": answer, **extra}

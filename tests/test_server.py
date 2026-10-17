@@ -24,6 +24,11 @@ import voice
 
 TOKEN = server.TOKEN
 
+# `llm.urllib` é o próprio módulo `urllib`: um dublê posto no `urlopen` do Ollama
+# apanharia também o cliente HTTP destes testes. Este é o de verdade, guardado antes
+# de qualquer troca.
+_URLOPEN = urllib.request.urlopen
+
 
 def http(base, method, path, body=None, token=TOKEN, in_query=False):
     headers = {"X-Eddy-Token": token} if token is not None else {}
@@ -35,7 +40,7 @@ def http(base, method, path, body=None, token=TOKEN, in_query=False):
         path = f"{path}?token={token}"
     req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with _URLOPEN(req, timeout=10) as r:
             return r.status, r.read(), dict(r.headers)
     except urllib.error.HTTPError as e:
         return e.code, e.read(), dict(e.headers)
@@ -43,6 +48,22 @@ def http(base, method, path, body=None, token=TOKEN, in_query=False):
 
 def as_json(raw):
     return json.loads(raw or b"{}")
+
+
+class Linhas:
+    """O que o urlopen devolve ao `llm.chat`: linhas do stream do Ollama."""
+
+    def __init__(self, linhas):
+        self.linhas = linhas
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        pass
+
+    def __iter__(self):
+        return iter(self.linhas)
 
 
 def sse_events(raw):
@@ -223,12 +244,43 @@ class TurnTest(ServerTest):
         self.assertEqual(eventos, [])
         self.assertEqual(self.eddy.history, [])
 
+    def test_a_token_from_a_call_that_just_ended_never_reaches_the_client(self):
+        """A geração muda entre o `should_stop` e a emissão do token: esse token já
+        é da chamada velha e não pode aparecer no stream. A verificação por
+        fragmento, sozinha, não chega — a troca acontece a seguir."""
+        real_chat = llm.chat
+
+        def chat_trocando(*args, on_token=None, should_stop=None, **kwargs):
+            def verifica_e_troca():
+                parar = should_stop()
+                if not parar:  # só depois de decidir que continua é que a chamada muda
+                    self.post("/api/eddy/call/start")
+                return parar
+            return real_chat(*args, on_token=on_token, should_stop=verifica_e_troca, **kwargs)
+
+        linhas = [json.dumps({"message": {"content": parte}}).encode() + b"\n"
+                  for parte in ("[sighs] token", " da chamada velha")]
+        with mock.patch.object(llm, "chat", side_effect=chat_trocando), \
+                mock.patch.object(llm.urllib.request, "urlopen", return_value=Linhas(linhas)):
+            _, eventos, _ = self.post_sse("/api/eddy/turn", {"text": "pergunta velha"})
+        self.assertEqual(eventos, [])
+        self.assertEqual(self.eddy.history, [])
+
     def test_a_current_turn_still_publishes_its_answer(self):
         with mock.patch.object(llm, "chat", return_value={"content": "resposta da chamada"}):
             _, eventos, _ = self.post_sse("/api/eddy/turn", {"text": "pergunta"})
         self.assertEqual([e["type"] for e in eventos], ["done"])
         self.assertEqual(eventos[0]["text"], "resposta da chamada")
         self.assertEqual(len(self.eddy.history), 2)
+
+    def test_a_current_turn_still_streams_its_tokens(self):
+        """O token a sério continua a sair um a um, como antes."""
+        linhas = [json.dumps({"message": {"content": parte}}).encode() + b"\n"
+                  for parte in ("Bom ", "dia.")]
+        with mock.patch.object(llm.urllib.request, "urlopen", return_value=Linhas(linhas)):
+            _, eventos, _ = self.post_sse("/api/eddy/turn", {"text": "bom dia"})
+        self.assertEqual([e["type"] for e in eventos], ["token", "token", "done"])
+        self.assertEqual([e["token"] for e in eventos[:2]], ["Bom ", "dia."])
 
 
 class CallTest(ServerTest):
