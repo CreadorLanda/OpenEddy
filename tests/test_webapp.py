@@ -228,6 +228,20 @@ class SilenceTest(WebServerTest):
         self.assertTrue(body["text"])
 
 
+class SemaforoQueAvisa(limits.Semaforo):
+    """Um semáforo que diz quando largou um lugar. O `finally` do servidor
+    corre depois de a resposta chegar, e sem este sinal o teste afirma uma
+    coisa antes de ela acontecer — uma falha que só aparece de vez em quando."""
+
+    def __init__(self, n, largado):
+        super().__init__(n)
+        self.largado = largado
+
+    def largar(self):
+        super().largar()
+        self.largado.set()
+
+
 class LimitesTest(WebServerTest):
     """Balde de fichas por pessoa e semáforo por operação cara (Issue #6).
 
@@ -235,12 +249,18 @@ class LimitesTest(WebServerTest):
     vive em `_limites()` e é verificado em `test_os_limites_padrao_...`.
     """
 
-    def com_limites(self, start=(2, 0.0), rota=(20, 0.0), silencio=(30, 0.0), lugares=8):
+    def com_limites(self, start=(2, 0.0), rota=(20, 0.0), silencio=(30, 0.0), lugares=8,
+                    semaforo=None):
         return mock.patch.object(webapp, "LIMITES", {
             "/api/web/start": (limits.RateLimit(*start), None),
-            "/api/web/route": (limits.RateLimit(*rota), limits.Semaforo(lugares)),
+            "/api/web/route": (limits.RateLimit(*rota), semaforo or limits.Semaforo(lugares)),
             "/api/web/silence": (limits.RateLimit(*silencio), None),
         })
+
+    def semaforo_que_avisa(self, lugares):
+        largado = threading.Event()
+        self.addCleanup(largado.wait, 5)  # a thread do servidor não fica presa à espera
+        return SemaforoQueAvisa(lugares, largado), largado
 
     def com_duas_pessoas(self):
         return mock.patch.object(webapp, "puter_user",
@@ -371,20 +391,37 @@ class LimitesTest(WebServerTest):
         self.assertEqual(sorted(respostas.values()), [200, 200], "os dois que estavam dentro passaram")
 
     def test_o_lugar_volta_assim_que_o_atalho_termina(self):
-        with self.com_limites(rota=(20, 0.0), lugares=1), \
+        semaforo, largado = self.semaforo_que_avisa(1)
+        with self.com_limites(rota=(20, 0.0), semaforo=semaforo), \
                 mock.patch.object(webapp.assistant.web, "headlines", return_value=[]):
             self.assertEqual(self.post("/api/web/route", {"text": "notícias"})[0], 200)
-            self.assertEqual(webapp.LIMITES["/api/web/route"][1].livres(), 1)
+            self.assertTrue(largado.wait(5), "depois de responder, o lugar tem de ser largado")
+            self.assertEqual(semaforo.livres(), 1)
             self.assertEqual(self.post("/api/web/route", {"text": "que horas são"})[0], 200)
 
     def test_o_lugar_volta_mesmo_quando_o_atalho_falha(self):
-        with self.com_limites(rota=(20, 0.0), lugares=1), \
+        semaforo, largado = self.semaforo_que_avisa(1)
+        with self.com_limites(rota=(20, 0.0), semaforo=semaforo), \
                 mock.patch.object(webapp.assistant.web, "headlines",
                                   side_effect=RuntimeError("a news caiu")):
             self.assertEqual(self.post("/api/web/route", {"text": "notícias"})[0], 500)
-            self.assertEqual(webapp.LIMITES["/api/web/route"][1].livres(), 1,
-                             "o `finally` tem de largar o lugar mesmo com a rota em baixo")
+            self.assertTrue(largado.wait(5), "o `finally` tem de largar o lugar mesmo com a rota em baixo")
+            self.assertEqual(semaforo.livres(), 1)
         self.assertEqual(self.post("/api/web/route", {"text": "que horas são"})[0], 200)
+
+    def test_a_mesa_cheia_diz_quanto_tem_de_esperar_e_nao_um_segundo(self):
+        """O `Retry-After` tem de ser a espera que a pessoa vai encontrar. Com a
+        mesa cheia o espaço só abre quando uma chave parada é descartada, e isso
+        não é ao segundo seguinte: mandar a pessoa voltar já era dar uma resposta
+        que não serve para nada."""
+        with mock.patch.object(limits, "MAX_CHAVES", 1), \
+                self.com_limites(start=(5, 1.0)), self.com_duas_pessoas():
+            self.assertEqual(self.post("/api/web/start", {}, token="token-zeca")[0], 200)
+            status, body, headers = self.post("/api/web/start", {}, token="token-bruno")
+        self.assertEqual(status, 429, "a mesa tem uma cadeira e o zeca sentou-se nela")
+        # o valor é o tecto, a menos dos microssegundos que o pedido demorou
+        self.assertLessEqual(abs(int(headers["Retry-After"]) - int(limits.DESCARTE_SEG) - 1), 1)
+        self.assertGreater(int(headers["Retry-After"]), 1)
 
     def test_um_pedido_recusado_pelo_balde_nao_prende_lugar(self):
         with self.com_limites(rota=(0, 0.0), lugares=2):

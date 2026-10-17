@@ -17,6 +17,9 @@ import time
 # chega a existir, não um aviso. Ver `RateLimit.pega`.
 DESCARTE_SEG = 300.0
 MAX_CHAVES = 1000
+# O que se-promete a quem chega com a mesa cheia: o tempo que uma chave parada
+# demora a ser descartada, que é quando a mesa volta a ter lugar.
+CHEIA_ESPERA = DESCARTE_SEG
 
 
 class RateLimit:
@@ -42,7 +45,17 @@ class RateLimit:
                     # aberta: uma enxurrada de chaves novas reiniciava os baldes
                     # dos outros e o limite deixava de valer. Assim ninguém
                     # perde o seu, e a mesa nunca passa de `MAX_CHAVES`.
-                    return False, self.espera()
+                    #
+                    # A espera que se devolve não é zero: com a mesa cheia não há
+                    # ficha nenhuma a encher, e o que falta é espaço. A primeira
+                    # vez que há espaço é quando a chave mais antiga fica
+                    # `DESCARTE_SEG` sem ninguém tocar nela. Se as chaves que lá
+                    # estão se continuarem a usar, esse momento não chega e o
+                    # tecto é o melhor que se pode dizer — nunca um "já tens".
+                    if self._fichas:
+                        mais_velhe = min(quando for _, quando in self._fichas.values())
+                        return False, min(CHEIA_ESPERA, max(0.0, mais_velhe + DESCARTE_SEG - agora))
+                    return False, CHEIA_ESPERA
             fichas, quando = conhecidos if conhecidos else (self.capacidade, agora)
             fichas = min(self.capacidade, fichas + max(0.0, agora - quando) * self.por_segundo)
             if fichas >= 1:
@@ -63,8 +76,10 @@ class RateLimit:
             return self._fichas.get(chave, (self.capacidade, 0.0))[0]
 
     def _descarta(self, agora):
+        # `>=` e não `>`: uma chave parada há `DESCARTE_SEG` já está fora, e é
+        # exactamente esse o instante que `pega` promete a quem foi recusado.
         for chave, (_, quando) in list(self._fichas.items()):
-            if agora - quando > DESCARTE_SEG:
+            if agora - quando >= DESCARTE_SEG:
                 del self._fichas[chave]
 
 

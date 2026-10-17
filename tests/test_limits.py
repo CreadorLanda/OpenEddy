@@ -116,6 +116,34 @@ class RateLimitTest(unittest.TestCase):
         self.assertAlmostEqual(limite.fichas("pessoa-7"), 1000 - 1)
         self.assertTrue(limite.pega("pessoa-7")[0], "quem já estava cá continua a ter o seu balde")
 
+    def test_a_espera_da_mesa_cheia_e_a_hora_em_que_a_mesa_abre(self):
+        """A espera devolvida não é um número para Looks Like It Matters: é o
+        instante em que a chave mais antiga fica `DESCARTE_SEG` sem ninguém
+        tocar nela — e nesse instante, mesmo, o pedido passa. Prometer 1 s
+        mandava a pessoa voltar já e levar outra vez com o mesmo."""
+        limite = limits.RateLimit(5, 1.0, relogio=self.relogio)
+        for i in range(limits.MAX_CHAVES):
+            limite.pega(f"pessoa-{i}")
+        pode, espera = limite.pega("a-que-chega")
+        self.assertFalse(pode)
+        self.assertEqual(espera, limits.DESCARTE_SEG, "todas as chaves foram tocadas agora")
+        self.relogio.passa(espera)
+        self.assertTrue(limite.pega("a-que-chega")[0], "passado o tempo prometido, entra mesmo")
+
+    def test_a_espera_encolhe_quando_ja_ha_alguem_pronto_a_sair(self):
+        """Se uma das chaves está quase a ser descartada, o espaço abre antes do
+        tecto — e a espera que se devolve é essa, não a maior possível."""
+        limite = limits.RateLimit(5, 1.0, relogio=self.relogio)
+        limite.pega("pessoa-0")
+        self.relogio.passa(limits.DESCARTE_SEG - 10)  # a pessoa 0 está quase a cair
+        for i in range(1, limits.MAX_CHAVES):
+            limite.pega(f"pessoa-{i}")
+        pode, espera = limite.pega("a-que-chega")
+        self.assertFalse(pode)
+        self.assertAlmostEqual(espera, 10.0)
+        self.relogio.passa(10)
+        self.assertTrue(limite.pega("a-que-chega")[0])
+
     def test_a_mesa_descongela_quando_a_gente_se_cansa(self):
         limite = limits.RateLimit(1, 0.0, relogio=self.relogio)
         for i in range(limits.MAX_CHAVES):
