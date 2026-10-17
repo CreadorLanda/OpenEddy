@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, test/issue-9-critical-flows]
 
 jobs:
   core:
@@ -33,7 +33,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # vitest 5 supports ^22.12.0 || ^24 || >=26. On Node 20 npm installs
+          # it anyway but warns EBADENGINE, so the app is outside the range its
+          # own test dependency declares.
+          node-version: "22.12"
           cache: npm
           cache-dependency-path: app/package-lock.json
       - run: npm ci
