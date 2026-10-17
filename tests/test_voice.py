@@ -13,6 +13,8 @@ import unittest
 from unittest import mock
 
 import numpy as np
+from websockets.exceptions import (ConnectionClosedError, ConnectionClosedOK, WebSocketException)
+from websockets.frames import Close
 
 import events
 import voice
@@ -186,10 +188,12 @@ class LocalListenTest(unittest.TestCase):
 class FakeWs:
     """O Scribe v2 Realtime, em memória."""
 
-    def __init__(self, script=()):
+    def __init__(self, script=(), entrou=None, largar=None):
         self.script = list(script)
         self.sent = []
         self.closed = False
+        self.entrou = entrou  # posto quando `recv` está à espera
+        self.largar = largar  # o `recv` não sai daqui antes disto estar posto
 
     def __enter__(self):
         return self
@@ -206,11 +210,17 @@ class FakeWs:
         fim = time.time() + 2
         while not self.sent and time.time() < fim:
             time.sleep(0.005)
+        if self.entrou is not None:
+            self.entrou.set()
+        if self.largar is not None:
+            self.largar.wait(2)
         if not self.script:
             raise TimeoutError()
         item = self.script.pop(0)
         if isinstance(item, Exception):
             raise item
+        if isinstance(item, str):
+            return item  # moldura em bruto, para quando o Scribe não manda json
         return json.dumps(item)
 
     def close(self):
@@ -224,8 +234,11 @@ def eleven_listen(script=(), connect_error=None, mic_blocks=None, **kw):
     mic = FakeMic(mic_blocks if mic_blocks is not None else blocks(said(0.2)))
     cliente = mock.Mock(connect=mock.Mock(side_effect=connect_error) if connect_error
                         else mock.Mock(return_value=ws))
-    with mock.patch.dict("sys.modules", {"websockets": mock.Mock(), "websockets.sync": mock.Mock(),
-                                         "websockets.sync.client": cliente}), \
+    # Só o `websockets.sync.client` é dublê. O resto fica na biblioteca a sério,
+    # porque a classificação da falha depende mesmo das excepções dela: um
+    # `websockets` inteiro em `mock` faria do módulo um pacote falso e o
+    # `websockets.exceptions` deixaria de importar.
+    with mock.patch.dict("sys.modules", {"websockets.sync.client": cliente}), \
             mock.patch.object(voice, "eleven_key", return_value="k"), \
             mock.patch.object(voice, "_mic", return_value=mic):
         return voice._listen_eleven(max_seconds=kw.pop("max_seconds", 5.0),
@@ -271,6 +284,206 @@ class ElevenListenTest(unittest.TestCase):
             except voice._NoNetwork:
                 pass
             self.assertFalse(voice._mic_lock.locked())
+
+
+class WebSocketFailureTest(unittest.TestCase):
+    """O que a Issue #7 pegou: uma ligação que morre *depois* de estabelecida
+    não é uma falha que o `listen()` attendesse, e a pessoa ficava muda.
+
+    O `websockets` aqui é o da verdade — só o `connect` é dublê — porque a
+    classificação da falha depende mesmo das excepções da biblioteca.
+    """
+
+    CORTADA = ConnectionClosedError(Close(1006, "abnormal closure"), None)
+    FECHADA = ConnectionClosedOK(Close(1000, "bye"), Close(1000, "bye"), True)
+
+    def setUp(self):
+        voice._cancel.clear()  # o `cancel_listen` de um teste não entra no seguinte
+        self.addCleanup(voice._cancel.clear)
+        pub = mock.patch.object(events, "publish")
+        pub.start()
+        self.addCleanup(pub.stop)
+        self.publicado = pub
+
+    def scribe(self, script=(), connect_error=None, mic_blocks=None, entrou=None, largar=None):
+        ws = FakeWs(script=script, entrou=entrou, largar=largar)
+        cliente = mock.Mock(connect=mock.Mock(side_effect=connect_error) if connect_error
+                            else mock.Mock(return_value=ws))
+        mic = FakeMic(mic_blocks if mic_blocks is not None else blocks(said(0.2)))
+        return mock.patch.dict("sys.modules", {"websockets.sync.client": cliente}), ws, mic
+
+    def local(self, texto="frase local", ordem=None, ws=None):
+        """O `_listen_local` dublê, que regista em que estado estava a sessão
+        remota quando o Whisper local foi chamado."""
+        def _local(*a, **k):
+            if ordem is not None:
+                ordem.append(("local", ws.closed))
+            return texto
+
+        dublê = mock.Mock(side_effect=_local)
+        return mock.patch.object(voice, "_listen_local", dublê), dublê
+
+    # ── 1. o caminho bom continua igual ──────────────────────────────────────
+
+    def test_a_sessao_remota_completa_devolve_o_texto_dela(self):
+        ws = FakeWs([{"message_type": "partial_transcript", "text": "olá"},
+                     {"message_type": "committed_transcript", "text": "olá, Eddy"}])
+        with mock.patch.dict("sys.modules", {"websockets.sync.client": mock.Mock(
+                connect=mock.Mock(return_value=ws))}), \
+                mock.patch.object(voice, "eleven_key", return_value="k"), \
+                mock.patch.object(voice, "_mic", return_value=FakeMic(blocks(said(0.2)))), \
+                mock.patch.object(voice, "_listen_local") as local:
+            self.assertEqual(voice.listen(max_seconds=5.0, start_timeout=0.05), "olá, Eddy")
+        local.assert_not_called(), "com a rede a funcionar não se toca no Whisper local"
+        self.assertFalse(voice._mic_lock.locked())
+
+    # ── 2. a ligação nunca abre ──────────────────────────────────────────────
+
+    def test_uma_ligacao_que_nunca_abre_cai_no_whisper_local(self):
+        for erro in (ConnectionRefusedError("recusou a conexão"),
+                     TimeoutError("não respondeu a tempo do open_timeout"),
+                     WebSocketException("handshake recusado")):
+            with self.subTest(erro=type(erro).__name__):
+                ligar, _, _ = self.scribe(connect_error=erro)
+                local, dublê = self.local()
+                with ligar, local, mock.patch.object(voice, "eleven_key", return_value="k"), \
+                        mock.patch.object(events, "publish"):
+                    self.assertEqual(voice.listen(max_seconds=5.0, start_timeout=0.05), "frase local")
+                dublê.assert_called_once()
+                self.assertFalse(voice._mic_lock.locked())
+
+    def test_um_erro_de_programacao_a_abrir_a_ligacao_nao_e_rede(self):
+        """O `connect` também pode explodir por culpa do nosso código — uma
+        cabeçalho mal escrito, um URL torto. Isso não é a rede a cair: virando
+        `_NoNetwork`, o Whisper local respondia e o bug ficava lá para sempre,
+        com a pessoa sem Scribe e sem ninguém a saber porquê."""
+        for erro in (TypeError("cabeçalho inválido"), ValueError("URL inválido")):
+            with self.subTest(erro=type(erro).__name__):
+                ligar, _, _ = self.scribe(connect_error=erro)
+                local, dublê = self.local()
+                with ligar, local, mock.patch.object(voice, "eleven_key", return_value="k"), \
+                        mock.patch.object(events, "publish"):
+                    with self.assertRaises(type(erro)):
+                        voice.listen(max_seconds=5.0, start_timeout=0.05)
+                dublê.assert_not_called()
+                self.assertFalse(voice._mic_lock.locked())
+
+    # ── 3. a ligação morre a meio da sessão ──────────────────────────────────
+
+    def test_uma_ligacao_cortada_a_meio_assume_o_whisper_local(self):
+        for nome, erro in (("rede", self.CORTADA), ("fecho normal", self.FECHADA)):
+            with self.subTest(fecho=nome):
+                ordem = []
+                ligar, ws, mic = self.scribe(script=[erro])
+                local, dublê = self.local(ordem=ordem, ws=ws)
+                with ligar, local, mock.patch.object(voice, "eleven_key", return_value="k"), \
+                        mock.patch.object(voice, "_mic", return_value=mic), \
+                        mock.patch.object(events, "publish"):
+                    self.assertEqual(voice.listen(max_seconds=5.0, start_timeout=0.05), "frase local")
+                dublê.assert_called_once()
+                self.assertEqual(ordem, [("local", True)],
+                                 "o Whisper local só começa com a sessão remota já fechada, "
+                                 "e só uma vez")
+                self.assertEqual(mic.killed, 1, "o microfone remoto tem de ser morto")
+                self.assertFalse(voice._mic_lock.locked())
+
+    # ── 4. o tempo de espera da sondagem não é uma queda ─────────────────────
+
+    def test_um_scribe_calado_nao_e_uma_queda_de_rede(self):
+        """`recv(timeout=0.25)` atira `TimeoutError` quando o Scribe cala um
+        quarto de segundo: é a sondagem a funcionar, não a rede a cair. Cai para
+        o Whisper local seria trocar uma transcrição boa por uma segunda
+        passagem pelo microfone a cada pausa."""
+        ws = FakeWs(script=[])  # nunca responde: só a sondagem
+        with mock.patch.dict("sys.modules", {"websockets.sync.client": mock.Mock(
+                connect=mock.Mock(return_value=ws))}), \
+                mock.patch.object(voice, "eleven_key", return_value="k"), \
+                mock.patch.object(voice, "_mic", return_value=FakeMic([])), \
+                mock.patch.object(voice, "_listen_local") as local, \
+                mock.patch.object(events, "publish"):
+            self.assertEqual(voice.listen(max_seconds=0.3, start_timeout=0.05), "")
+        local.assert_not_called()
+        self.assertFalse(voice._mic_lock.locked())
+
+    # ── 5. o que não é rede continua a não ser rede ──────────────────────────
+
+    def test_uma_resposta_que_nao_e_json_nao_vira_queda_de_rede(self):
+        """Dados tortos do Scribe não são falta de rede. Envolver isto em
+        `_NoNetwork` punha a pessoa com uma transcrição local silenciosa e
+        apagava o erro de verdade."""
+        ws = FakeWs(script=["isto não é json"])
+        with mock.patch.dict("sys.modules", {"websockets.sync.client": mock.Mock(
+                connect=mock.Mock(return_value=ws))}), \
+                mock.patch.object(voice, "eleven_key", return_value="k"), \
+                mock.patch.object(voice, "_mic", return_value=FakeMic(blocks(said(0.2)))), \
+                mock.patch.object(voice, "_listen_local") as local, \
+                mock.patch.object(events, "publish"):
+            with self.assertRaises(json.JSONDecodeError):
+                voice.listen(max_seconds=5.0, start_timeout=0.05)
+        local.assert_not_called()
+        self.assertFalse(voice._mic_lock.locked())
+
+    def test_um_erro_de_programacao_da_mesma_excepcao_nao_e_rede(self):
+        """`websockets` herda de `Exception`, como tudo: uma excepção qualquer
+        atirada por baixo da folha continua a ser um erro e a aparecer."""
+        ws = FakeWs(script=[TypeError("isto não devia ter acontecido")])
+        with mock.patch.dict("sys.modules", {"websockets.sync.client": mock.Mock(
+                connect=mock.Mock(return_value=ws))}), \
+                mock.patch.object(voice, "eleven_key", return_value="k"), \
+                mock.patch.object(voice, "_mic", return_value=FakeMic(blocks(said(0.2)))), \
+                mock.patch.object(voice, "_listen_local") as local, \
+                mock.patch.object(events, "publish"):
+            with self.assertRaises(TypeError):
+                voice.listen(max_seconds=5.0, start_timeout=0.05)
+        local.assert_not_called()
+
+    # ── 6. desligar não pode abrir o microfone outra vez ─────────────────────
+
+    def test_desligar_durante_a_queda_remota_nao_volta_a_ouvir(self):
+        """A pessoa desliga com a ligação ainda a cair. O `_listen_local` começa
+        por limpar a marca de cancelamento, portanto sem cuidado a aplicação
+        ficava com o microfone outra vez: desligou-se e alguém continuava a
+        ouvir, até 12 s depois."""
+        entrou, largar = threading.Event(), threading.Event()
+        ligar, ws, mic = self.scribe(script=[self.CORTADA], mic_blocks=[], entrou=entrou, largar=largar)
+        local, dublê = self.local()
+        resultado = []
+        with ligar, local, mock.patch.object(voice, "eleven_key", return_value="k"), \
+                mock.patch.object(voice, "_mic", return_value=mic), \
+                mock.patch.object(voice.subprocess, "Popen",
+                                  side_effect=AssertionError("o microfone não pode ser aberto outra vez")) as popen, \
+                mock.patch.object(events, "publish"):
+            escuta = threading.Thread(target=lambda: resultado.append(
+                voice.listen(max_seconds=5.0, start_timeout=5.0)))
+            escuta.start()
+            try:
+                self.assertTrue(entrou.wait(5), "a escuta remota não chegou a receber nada")
+                voice.cancel_listen()
+            finally:
+                largar.set()
+                escuta.join(5)
+        self.assertFalse(escuta.is_alive())
+        self.assertEqual(resultado, [""], "desligar dá uma resposta vazia, não uma gravação nova")
+        dublê.assert_not_called()
+        popen.assert_not_called()
+        self.assertFalse(voice._mic_lock.locked())
+
+    # ── 7. o aviso diz o que aconteceu, sem a chave ──────────────────────────
+
+    def test_o_aviso_da_queda_nao_leva_a_chave_da_elevenlabs(self):
+        """A mensagem vai para os eventos e daí para a janela e para os logs:
+        nem a chave nem o token podem aparecer nela."""
+        ligar, _, _ = self.scribe(script=[self.CORTADA])
+        with ligar, mock.patch.object(voice, "eleven_key", return_value="sk-super-secreto"), \
+                mock.patch.object(voice, "_mic", return_value=FakeMic(blocks(said(0.2)))), \
+                mock.patch.object(voice, "_listen_local", return_value=""), \
+                mock.patch.object(events, "publish") as pub:
+            voice.listen(max_seconds=5.0, start_timeout=0.05)
+        avisos = [c.kwargs.get("error", "") for c in pub.call_args_list if c[0][0] == "voice.error"]
+        self.assertEqual(len(avisos), 1)
+        self.assertIn("whisper local", avisos[0])
+        self.assertNotIn("sk-super-secreto", avisos[0])
+        self.assertNotIn("xi-api-key", avisos[0])
 
 
 class TtsTest(unittest.TestCase):

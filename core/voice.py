@@ -122,11 +122,19 @@ def listen(max_seconds=15.0, start_timeout=6.0, lang="pt") -> str:
             return _listen_eleven(max_seconds, start_timeout, lang)
         except _NoNetwork as e:
             events.publish("voice.error", error=f"Scribe indisponível, usando o whisper local: {e}")
+            if _cancel.is_set():
+                # A pessoa desligou enquanto o Scribe estava a cair. Sem esta
+                # volta atrás, `_listen_local` começava por limpar a marca e
+                # ficava com o microfone outra vez — a pessoa desligou e a
+                # aplicação continuou a escutar.
+                return ""
     return _listen_local(max_seconds, start_timeout=start_timeout, lang=lang)
 
 
 class _NoNetwork(Exception):
-    pass
+    """A sessão remota não se conseguiu estabelecer ou manter por uma razão que
+    outra tentativa resolveria: a rede caiu, o servidor fechou, o handshake foi
+    recusado. É isto — e só isto — que justifica o Whisper local."""
 
 
 def _mic(rate=16000, fmt="s16le"):
@@ -139,7 +147,16 @@ def _mic(rate=16000, fmt="s16le"):
 
 def _listen_eleven(max_seconds: float, start_timeout: float, lang: str) -> str:
     """Scribe v2 Realtime: manda o microfone em blocos de 100 ms e espera o
-    trecho ser fechado pelo VAD deles. Mostra o texto parcial ao vivo."""
+    trecho ser fechado pelo VAD deles. Mostra o texto parcial ao vivo.
+
+    Tudo o que a biblioteca e o `socket` deixam cair como falha de transporte
+    ou de sessão vira `_NoNetwork`, que é o sinal para o Whisper local. O
+    limite é (`WebSocketException`, `OSError`) e não `Exception`: um `json` que
+    não se lê, o `RuntimeError` do microfone ocupado ou o ffmpeg em falta têm de
+    aparecer como o que são — embrulhá-los em "sem rede" escondia o erro atrás
+    de uma transcrição local e ninguém ficava a saber.
+    """
+    from websockets.exceptions import WebSocketException
     from websockets.sync.client import connect
 
     if not _mic_lock.acquire(blocking=False):
@@ -152,7 +169,7 @@ def _listen_eleven(max_seconds: float, start_timeout: float, lang: str) -> str:
     try:
         try:
             ws = connect(url, additional_headers={"xi-api-key": eleven_key() or ""}, open_timeout=6)
-        except Exception as e:
+        except (WebSocketException, OSError) as e:
             raise _NoNetwork(str(e)) from e
         p = _mic()
         state = {"heard": "", "done": False}
@@ -187,7 +204,7 @@ def _listen_eleven(max_seconds: float, start_timeout: float, lang: str) -> str:
                     try:
                         m = json.loads(ws.recv(timeout=0.25))
                     except TimeoutError:
-                        continue
+                        continue  # a sondagem de 0,25 s: o silêncio não é uma falha
                     kind = m.get("message_type") or ""
                     if kind == "partial_transcript":
                         if m.get("text"):
@@ -200,6 +217,13 @@ def _listen_eleven(max_seconds: float, start_timeout: float, lang: str) -> str:
                     elif kind.endswith("error"):
                         raise _NoNetwork(m.get("error") or kind)
                 return ""
+        except (WebSocketException, OSError) as e:
+            # `recv()` atira `ConnectionClosed` (e subclasses) quando a ligação
+            # morre a meio da sessão — tanto num corte de rede como num fecho
+            # limpo do servidor. O `with ws:` já a fechou; daqui sai o sinal
+            # para o Whisper local assumir. O `TimeoutError` da sondagem foi
+            # tratado acima e nunca chega aqui.
+            raise _NoNetwork(str(e)) from e
         finally:
             state["done"] = True
     finally:
