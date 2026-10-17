@@ -759,15 +759,17 @@ function openGame(kind: Exclude<GameKind, "made">, announce: boolean) {
 
 /** O Eddy programa um jogo na hora e ele roda no painel. */
 function openMade(idea: string) {
-  mountGame(
-    new MadeGame(idea, gameHost, {
-      make: (i, onToken, fix) => B.makeGame(i, profile!, onToken, fix),
-      host: (html) => B.hostGame(html),
-      theme: faceTheme,
-      slow: !B.web,
-    }),
-    null,
-  );
+  mountGame(makeGame(idea), null);
+}
+
+/** O jogo começa a ser programado já aqui; aparecer na tela é com `mountGame`. */
+function makeGame(idea: string) {
+  return new MadeGame(idea, gameHost, {
+    make: (i, onToken, fix) => B.makeGame(i, profile!, onToken, fix),
+    host: (html) => B.hostGame(html),
+    theme: faceTheme,
+    slow: !B.web,
+  });
 }
 
 function mountGame(g: GameSession, pool: string | null) {
@@ -805,7 +807,7 @@ function closeGallery() {
   refreshSide();
 }
 
-async function showImages(q: string) {
+async function showImages(q: string, search: Promise<Pic[]> = searchImages(q)) {
   if (!call.area) return;
   const gen = call.gen;
   // o painel abre já procurando: a pessoa vê que o Eddy está atrás da imagem
@@ -817,7 +819,7 @@ async function showImages(q: string) {
   let pics: Pic[] = [];
   let why = "";
   try {
-    pics = await searchImages(q);
+    pics = await search;
   } catch (e) {
     why = (e as Error).message;
   }
@@ -838,11 +840,24 @@ async function showImages(q: string) {
   window.setTimeout(() => call.gallery === g.el && closeGallery(), 4000);
 }
 
-function doAction(a: Action) {
-  if (a.kind === "game") openGame(a.game, false);
-  else if (a.kind === "make") openMade(a.idea);
-  else if (a.kind === "theme") setTheme(a.to);
-  else if (a.kind === "image" && !a.blocked) void showImages(a.query);
+/**
+ * Uma ação pedida na fala. O trabalho pesado já começa (a busca da imagem, o
+ * código do jogo), mas a tela só muda quando o Eddy TERMINA de falar: a função
+ * devolvida é o que acontece nessa hora.
+ */
+function prepareAction(a: Action): { run: () => void; drop?: () => void } {
+  if (a.kind === "image") {
+    if (a.blocked) return { run: () => {} };
+    const found = searchImages(a.query);
+    found.catch(() => {}); // o erro aparece no painel, quando ele abrir
+    return { run: () => void showImages(a.query, found) };
+  }
+  if (a.kind === "make") {
+    const g = makeGame(a.idea);
+    return { run: () => mountGame(g, null), drop: () => g.close() };
+  }
+  if (a.kind === "game") return { run: () => openGame(a.game, false) };
+  return { run: () => setTheme(a.to) };
 }
 
 async function loop() {
@@ -1001,8 +1016,10 @@ async function askInner(text: string): Promise<SceneKind | undefined> {
       for (const s of deferred.splice(0)) speech.say(s);
     })();
   }
+  // as ações esperam a fala acabar (senão a tela muda no meio da frase)
+  const later: { run: () => void; drop?: () => void }[] = [];
   try {
-    const onAction = (a: Action) => call.gen === minha && doAction(a);
+    const onAction = (a: Action) => call.gen === minha && later.push(prepareAction(a));
     const out = await B.turn(text, profile!, (tok) => {
       if (call.gen !== minha) return;
       full += tok;
@@ -1022,12 +1039,17 @@ async function askInner(text: string): Promise<SceneKind | undefined> {
     if (out.news) renderNews(out.news);
     if (out.settings) voice = out.settings.voice;
     await speech.idle();
+    if (later.length) await sleep(350); // um respiro entre a frase e a tela mudar
+    if (call.gen !== minha) return undefined;
+    for (const a of later.splice(0)) a.run();
     return out.event;
   } catch (e) {
     ringer?.holdMusic(false);
     setFace("error", "Erro: " + (e as Error).message);
     await sleep(2500);
     return undefined;
+  } finally {
+    for (const a of later) a.drop?.(); // não chegou a aparecer (desligou, erro): descarta
   }
 }
 

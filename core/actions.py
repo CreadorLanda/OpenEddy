@@ -170,25 +170,25 @@ def note(action: dict) -> str:
         d = ("A pessoa pediu para ver uma imagem imprópria. Recuse com desdém e superioridade, "
              "sem repetir o pedido nem descrever nada, e mude de assunto. 1 frase.")
     elif kind == "image":
-        d = (f"A pessoa pediu para ver imagens de “{action.get('query', '')}”. Você está PROCURANDO "
-             "agora — elas AINDA NÃO apareceram. Diga que está procurando, com sarcasmo (um gênio "
+        d = (f"A pessoa pediu para ver imagens de “{action.get('query', '')}”. Assim que você "
+             "terminar esta frase, vai procurar — elas AINDA NÃO apareceram. Diga que vai procurar, com sarcasmo (um gênio "
              "como você virou buscador de imagens). NUNCA diga que já mostrou, nem 'aqui está', nem "
              "descreva a imagem. 1 frase curta.")
     elif kind == "theme":
         to = {"classic": "o visual clássico, branco com linhas pretas",
               "holo": "o holograma azul de sempre"}.get(action.get("to"), "um visual novo")
-        d = (f"A pessoa pediu para você mudar de visual e você acabou de mudar para {to}. "
-             "Comente, convencido, que fica lindo de qualquer jeito. 1 frase curta.")
+        d = (f"A pessoa pediu para você mudar de visual: assim que terminar esta frase você muda para {to}. "
+             "Anuncie a troca, convencido de que fica lindo de qualquer jeito. 1 frase curta.")
     elif kind == "make":
         o_que = action.get("idea") or "um jogo à sua escolha"
-        d = (f"A pessoa pediu para você CRIAR um jogo: “{o_que}”. Você vai programar agora — na tela "
-             "dela aparece você programando, e o jogo só fica pronto daqui a pouco. Diga com arrogância "
+        d = (f"A pessoa pediu para você CRIAR um jogo: “{o_que}”. Assim que terminar esta frase "
+             "você começa a programar (aparece na tela) e o jogo só fica pronto depois. Diga com arrogância "
              "que vai criar uma obra-prima em segundos (se a ideia veio vaga, diga o que você decidiu "
              "fazer). NÃO diga que já está pronto. NÃO fale de código. 1 frase curta.")
     elif kind == "game":
         jogo = _GAMES.get(action.get("game"), "xadrez")
-        d = (f"A pessoa te desafiou para uma partida de {jogo}. O jogo já está na tela e ela começa. "
-             "Aceite com arrogância e diga que vai ganhar fácil. 1 frase curta.")
+        d = (f"A pessoa te desafiou para uma partida de {jogo}. O jogo abre na tela assim que você "
+             "terminar esta frase, e ela começa. Aceite com arrogância e diga que vai ganhar fácil. 1 frase curta.")
     else:
         return ""
     return f"\n\n[NOTA DE DIREÇÃO — não leia em voz alta, só interprete: {d}]"
