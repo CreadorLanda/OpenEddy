@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main, feat/issue-1-persistent-memory]  # TEMP:探测 esta branch
+    branches: [main]
 
 jobs:
   core:
