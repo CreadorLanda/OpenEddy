@@ -351,6 +351,22 @@ describe("reading the PCM that is still coming", () => {
     expect(blocos).toEqual([]);
   });
 
+  it("never starts reading from a stream that would keep it waiting", async () => {
+    // Sinal já abortado + servidor calado: quem entrasse na leitura ficava
+    // pendurado para sempre (o abort não volta a disparar) e o stream ficava
+    // trancado. Tem de desistir antes de pedir o primeiro bloco.
+    const ctrl = new AbortController();
+    ctrl.abort();
+    const calado = new ReadableStream<Uint8Array>({ pull: () => new Promise(() => {}) }); // calado para sempre
+    const leitor = vi.spyOn(calado, "getReader");
+    const blocos: number[] = [];
+    const leitura = readPcm(calado, RATE, ctrl.signal, (b) => blocos.push(b.byteLength));
+    expect(await Promise.race([leitura, new Promise((r) => setTimeout(() => r("pendurada"), 250))])).toBe(false);
+    expect(leitor).not.toHaveBeenCalled(); // nem sequer pegou no corpo da resposta
+    expect(calado.locked).toBe(false);
+    expect(blocos).toEqual([]);
+  });
+
   it("drops the abort listener when the stream ends", async () => {
     const ctrl = new AbortController();
     const add = vi.spyOn(ctrl.signal, "addEventListener");

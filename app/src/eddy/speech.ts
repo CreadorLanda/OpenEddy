@@ -59,9 +59,14 @@ export function splitAtTags(text: string): string[] {
 
 /**
  * Lê o PCM do corpo da resposta em blocos de ~120 ms e entrega cada bloco a
- * `onBlock`. Devolve false se a pessoa interrompeu no meio — nesse caso o leitor
- * é cancelado (e a leitura pendente solta-se de imediato, sem esperar o servidor
+ * `onBlock`. Devolve false se a pessoa interrompeu — nesse caso o leitor é
+ * cancelado (e a leitura pendente solta-se de imediato, sem esperar o servidor
  * mandar mais áudio) e `onBlock` não é mais chamado.
+ *
+ * Se a sessão já estiver interrompida à entrada, nem sequer se toca no corpo da
+ * resposta: o sinal abortado já não dispara eventos, portanto quem largasse a
+ * leitura pendurada ficaria à espera de áudio que já não interessa, com o
+ * stream trancado.
  */
 export async function readPcm(
   body: ReadableStream<Uint8Array>,
@@ -69,6 +74,7 @@ export async function readPcm(
   signal: AbortSignal,
   onBlock: (pcm: Uint8Array) => void,
 ): Promise<boolean> {
+  if (signal.aborted) return false;
   const reader = body.getReader();
   const onAbort = () => {
     void reader.cancel().catch(() => {});
