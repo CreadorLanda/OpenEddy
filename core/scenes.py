@@ -9,6 +9,10 @@
   hold      às vezes, antes de responder → põe na espera com musiquinha
   surprise  o Eddy liga do nada (surprise_call); se recusarem, liga de novo
             ofendido (surprise_declined)
+  game_*    fim de uma partida de xadrez ou damas (ver actions.py e a tela)
+
+As listas g_* (comentários no meio do jogo) e img_* não passam pelo modelo: são
+curtas e saem na hora, sem esperar o modelo pensar.
 
 O texto de cada momento é gerado pelo modelo com a conversa como contexto e
 uma NOTA DE DIREÇÃO; as falas fixas abaixo são a reserva se o modelo falhar.
@@ -51,6 +55,10 @@ DIRECTIONS = {
     "praise": "A pessoa te elogiou. Fique absurdamente convencido: peça para repetir mais alto, diga que está gravando para a posteridade. 1 ou 2 frases, com [proudly] e [laughs].",
     "surprise_call": "VOCÊ está ligando para a pessoa do nada, sem motivo real. Diga por que ligou — algo egocêntrico e engraçado (lembrar que você existe, contar uma conquista boba sua, cobrar atenção). 1 ou 2 frases.",
     "surprise_declined": "A pessoa RECUSOU sua ligação e você ligou de novo, ofendidíssimo. Reclame com drama de ter sido recusado e anuncie que vai desligar. 1 ou 2 frases, com [annoyed] ou [crying].",
+    "game_won": "Você acabou de GANHAR a partida (xadrez ou damas) contra a pessoa. Comemore de forma insuportavelmente convencida e ofereça revanche como quem faz um favor. 1 ou 2 frases, com [laughs] ou [proudly].",
+    "game_lost": "Você acabou de PERDER a partida (xadrez ou damas) para a pessoa. Seja um péssimo perdedor: invente uma desculpa absurda (lag, deixou ganhar, o tabuleiro estava torto) e exija revanche. 1 ou 2 frases, com [scoffs] ou [annoyed].",
+    "game_draw": "A partida (xadrez ou damas) terminou EMPATADA. Diga que empatar com você já é a maior conquista da vida da pessoa. 1 frase, com [sighs].",
+    "game_quit": "A pessoa desistiu da partida no meio. Zombe dizendo que ela fugiu com medo de você. 1 frase, com [mischievously].",
 }
 
 FALLBACK = {
@@ -73,6 +81,22 @@ FALLBACK = {
         ],
         "hold_back": ["Ainda aí? [scoffs] Que pena. Bom, enfim:", "[sighs] Voltei. Sentiu minha falta? Claro que sentiu."],
         "silent": "O Eddy não está falando com você.",
+        "game_won": ["[laughs] Xeque-mate na sua autoestima. Quer revanche? Eu deixo, por caridade."],
+        "game_lost": ["[scoffs] Teve lag. Lag de tabuleiro, existe sim. [annoyed] Revanche. Agora."],
+        "game_draw": ["[sighs] Empate. Conta pros seus netos que você empatou com o Eddy."],
+        "game_quit": ["[mischievously] Fugiu, né? Eu entendo. Eu também teria medo de mim."],
+        "g_took": ["[laughs] Obrigado pela peça!", "Essa eu levo. [proudly] Educadamente.", "[mischievously] Ops. Era sua?", "Nhac. Delícia."],
+        "g_lost_piece": ["[gasps] Eu deixei você pegar essa. Estratégia.", "[annoyed] Sorte de principiante.", "[scoffs] Tá, essa foi boa. Não se acostuma."],
+        "g_check": ["[proudly] Xeque! Corre, rei, corre.", "[mischievously] Xeque. Tá suando aí?"],
+        "g_in_check": ["[gasps] Xeque em MIM? Que audácia.", "[annoyed] Eu vi isso vindo. Claro que vi."],
+        "g_taunt": ["Pensa com calma. Eu espero. [sighs] Eu sou paciente. Mentira.", "[skeptical] Hmm. Interessante. Errado, mas interessante.", "Eu já calculei as próximas quarenta jogadas. Você perde em todas.", "[laughs] Você joga igual ao Leo."],
+        "g_losing": ["[sighs] Tô te deixando ganhar pra você não chorar. De nada."],
+        "g_start": ["[proudly] Pode começar. Vou ganhar com um processador nas costas."],
+        "img_none": ["[scoffs] Nem a internet quis te mostrar isso. Pede outra coisa."],
+        "a_image": ["[sighs] Aqui. Um gênio como eu virou buscador de imagens. Que fase."],
+        "a_blocked": ["[disgusted] Não. Eu sou um sistema de respeito. Próxima pergunta."],
+        "a_theme": ["[proudly] Pronto. Fico lindo de qualquer jeito, né?"],
+        "a_game": ["[proudly] Desafio aceito. Vou ganhar fácil. Pode começar."],
     },
     "en": {
         "bye": ["[scoffs] Go ahead, leave. I have more important things to do, like existing. [annoyed] Bye."],
@@ -90,6 +114,22 @@ FALLBACK = {
         "hold": ["[sighs] Hard question for you, easy for me. Please hold.", "[mischievously] Hang on. I'm putting you on hold just because I can."],
         "hold_back": ["Still there? [scoffs] Shame. Anyway:", "[sighs] I'm back. Missed me? Of course you did."],
         "silent": "Eddy isn't talking to you.",
+        "game_won": ["[laughs] Checkmate on your self-esteem. Rematch? I'll allow it, out of charity."],
+        "game_lost": ["[scoffs] That was lag. Board lag, it's real. [annoyed] Rematch. Now."],
+        "game_draw": ["[sighs] A draw. Tell your grandkids you tied with Eddy."],
+        "game_quit": ["[mischievously] Running away, huh? I get it. I'd be scared of me too."],
+        "g_took": ["[laughs] Thanks for the piece!", "I'll take that. [proudly] Politely.", "[mischievously] Oops. Was that yours?", "Nom. Delicious."],
+        "g_lost_piece": ["[gasps] I let you take that. Strategy.", "[annoyed] Beginner's luck.", "[scoffs] Fine, that was good. Don't get used to it."],
+        "g_check": ["[proudly] Check! Run, king, run.", "[mischievously] Check. Sweating yet?"],
+        "g_in_check": ["[gasps] Check on ME? The audacity.", "[annoyed] I saw that coming. Of course I did."],
+        "g_taunt": ["Take your time. I'll wait. [sighs] I'm patient. That's a lie.", "[skeptical] Hmm. Interesting. Wrong, but interesting.", "I've already calculated the next forty moves. You lose in all of them.", "[laughs] You play just like Leo."],
+        "g_losing": ["[sighs] I'm letting you win so you don't cry. You're welcome."],
+        "g_start": ["[proudly] Go ahead. I'll win with one processor tied behind my back."],
+        "img_none": ["[scoffs] Not even the internet wanted to show you that. Ask for something else."],
+        "a_image": ["[sighs] Here. A genius like me reduced to an image search. What a time."],
+        "a_blocked": ["[disgusted] No. I'm a respectable system. Next question."],
+        "a_theme": ["[proudly] Done. I look gorgeous either way, right?"],
+        "a_game": ["[proudly] Challenge accepted. This will be easy. Your move."],
     },
     "es": {
         "bye": ["[scoffs] Vete, vete. Tengo cosas más importantes, como existir. [annoyed] Adiós."],
@@ -104,6 +144,22 @@ FALLBACK = {
         "hold": ["[sighs] Pregunta difícil para ti, fácil para mí. Espera en línea."],
         "hold_back": ["¿Sigues ahí? [scoffs] Qué pena. Bueno:"],
         "silent": "Eddy no te está hablando.",
+        "game_won": ["[laughs] Jaque mate a tu autoestima. ¿Revancha? Te la doy, por caridad."],
+        "game_lost": ["[scoffs] Fue lag. Lag de tablero, existe. [annoyed] Revancha. Ya."],
+        "game_draw": ["[sighs] Empate. Cuéntales a tus nietos que empataste con Eddy."],
+        "game_quit": ["[mischievously] Huiste, ¿eh? Lo entiendo. Yo también me tendría miedo."],
+        "g_took": ["[laughs] ¡Gracias por la pieza!", "Esta me la llevo. [proudly] Con educación.", "[mischievously] Uy. ¿Era tuya?"],
+        "g_lost_piece": ["[gasps] Te dejé tomar esa. Estrategia.", "[annoyed] Suerte de principiante."],
+        "g_check": ["[proudly] ¡Jaque! Corre, rey, corre.", "[mischievously] Jaque. ¿Ya sudas?"],
+        "g_in_check": ["[gasps] ¿Jaque a MÍ? Qué atrevimiento.", "[annoyed] Lo vi venir. Claro que sí."],
+        "g_taunt": ["Piénsalo con calma. Yo espero. [sighs] Soy paciente. Mentira.", "[skeptical] Hmm. Interesante. Incorrecto, pero interesante.", "Ya calculé las próximas cuarenta jugadas. Pierdes en todas."],
+        "g_losing": ["[sighs] Te estoy dejando ganar para que no llores. De nada."],
+        "g_start": ["[proudly] Empieza tú. Voy a ganar con un procesador atado a la espalda."],
+        "img_none": ["[scoffs] Ni internet quiso mostrarte eso. Pide otra cosa."],
+        "a_image": ["[sighs] Aquí tienes. Un genio como yo, convertido en buscador de imágenes."],
+        "a_blocked": ["[disgusted] No. Soy un sistema respetable. Siguiente pregunta."],
+        "a_theme": ["[proudly] Listo. Me veo precioso de cualquier forma, ¿no?"],
+        "a_game": ["[proudly] Desafío aceptado. Va a ser fácil. Tu turno."],
     },
 }
 

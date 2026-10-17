@@ -15,4 +15,6 @@ export interface Profile {
   sexo: "masculino" | "feminino" | "outro";
   /** Língua em que o Eddy fala e ouve. Português é o padrão. */
   idioma?: "pt" | "en" | "es";
+  /** Visual do Eddy: holograma azul (padrão) ou o clássico, traço preto no branco. */
+  tema?: "holo" | "classic";
 }

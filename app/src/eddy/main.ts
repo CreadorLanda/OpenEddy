@@ -8,9 +8,11 @@ import "./eddy.css";
 import { Native, subscribe, type NewsItem, type SceneBundle } from "../core/api";
 import { h, externalLinks } from "../core/dom";
 import type { Profile } from "../core/types";
-import { EddyFace, type FaceState } from "./eddy";
+import { EddyFace, faceTheme, setFaceTheme, type FaceState, type FaceTheme } from "./eddy";
 import { Ringer } from "./ring";
-import { B, LINKS, sceneFallback, type SceneKind } from "./backend";
+import { B, LINKS, sceneFallback, type Action, type SceneKind } from "./backend";
+import { GameView, type GameHost, type GameKind } from "./games";
+import { galleryPanel, searchImages, type Pic } from "./images";
 import { memoryPanel } from "./memory";
 import { caption, readPcm, SpeechQueue, voiceText, splitAtTags } from "./speech";
 import * as Puter from "./puter";
@@ -42,6 +44,8 @@ function projectLinks() {
 const PHONE = `<svg viewBox="0 0 24 24" width="30" height="30" fill="currentColor"><path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1z"/></svg>`;
 const MIC = `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>`;
 const MIC_OFF = `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 9v2a3 3 0 0 0 5.1 2.1M15 9.3V6a3 3 0 0 0-5.7-1.3M5 11a7 7 0 0 0 11.6 5.3M19 11a7 7 0 0 1-.6 2.8M12 18v3M3 3l18 18"/></svg>`;
+const KNIGHT = `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M7 21h11M8.5 21c0-3 1-4.5 3-6.5-1.5.3-3 .2-4.5-.6L5.5 11.5 9 7.5V4l2.5 2C16 6.5 18 10 17.5 21"/><circle cx="12" cy="9.5" r=".6" fill="currentColor"/></svg>`;
+const CONTRAST = `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/></svg>`;
 const KEYS = `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>`;
 
 // ── rosto: um laço de desenho por tela, parado quando a tela sai ───────────────
@@ -86,6 +90,23 @@ function faceCanvas(face: EddyFace, cls: string) {
 
 function show(screen: HTMLElement) {
   root.replaceChildren(screen);
+}
+
+// ── visual: holograma ou clássico (branco com linhas pretas) ──────────────────
+
+function applyTheme(t: FaceTheme) {
+  setFaceTheme(t);
+  document.body.classList.toggle("classic", t === "classic");
+}
+
+/** Troca o visual e guarda no perfil (conta Puter), para a próxima vez. */
+function setTheme(to: FaceTheme | "toggle") {
+  const t: FaceTheme = to === "toggle" ? (faceTheme() === "classic" ? "holo" : "classic") : to;
+  applyTheme(t);
+  if (profile && profile.tema !== t) {
+    profile = { ...profile, tema: t };
+    void Puter.saveProfile(profile).catch(() => {});
+  }
 }
 
 // ── áudio: fala do Eddy em streaming, frase a frase; nível da boca; toque ─────
@@ -284,6 +305,16 @@ function profileScreen(first: boolean) {
     });
     return b;
   });
+  let tema: FaceTheme = p.tema ?? "holo";
+  const temas = (["holo", "classic"] as const).map((t) => {
+    const b = h("button", { type: "button", class: `seg ${t === tema ? "on" : ""}` }, { holo: "Holograma", classic: "Clássico (branco)" }[t]);
+    b.addEventListener("click", () => {
+      tema = t;
+      applyTheme(t); // já mostra como fica
+      temas.forEach((x) => x.classList.toggle("on", x === b));
+    });
+    return b;
+  });
   const voiceSel = h("select", {}, ...Object.entries(voices).map(([id, label]) => h("option", { value: id, selected: id === voice }, label))) as HTMLSelectElement;
   const err = h("p", { class: "error" });
   const save = h("button", { class: "primary big", type: "submit" }, first ? "Salvar e continuar" : "Salvar") as HTMLButtonElement;
@@ -292,7 +323,7 @@ function profileScreen(first: boolean) {
     "form",
     { class: "card form", onsubmit: async (ev: Event) => {
       ev.preventDefault();
-      const next: Profile = { nome: nome.value.trim(), idade: Number(idade.value), sexo, idioma };
+      const next: Profile = { nome: nome.value.trim(), idade: Number(idade.value), sexo, idioma, tema };
       if (!next.nome) return void (err.textContent = "Ele precisa saber seu nome. Senão vai te chamar de “humano” pra sempre.");
       if (!(next.idade >= 1 && next.idade <= 120)) return void (err.textContent = "Idade entre 1 e 120.");
       save.disabled = true;
@@ -313,13 +344,14 @@ function profileScreen(first: boolean) {
     h("label", {}, "Idade"), idade,
     h("label", {}, "Sexo"), h("div", { class: "segs" }, ...segs),
     h("label", {}, "Idioma do Eddy"), h("div", { class: "segs" }, ...langs),
+    h("label", {}, "Visual do Eddy"), h("div", { class: "segs" }, ...temas),
     B.web ? null : h("label", {}, "Voz do Eddy"),
     B.web ? null : voiceSel,
     // A memória precisa do dono ligado no núcleo, por isso só aparece depois do
     // primeiro perfil guardado.
     first ? null : memoryPanel(!B.web, () => profileScreen(false)),
     err,
-    h("div", { class: "row" }, first ? null : h("button", { type: "button", class: "ghost", onclick: () => homeScreen() }, "Cancelar"), save),
+    h("div", { class: "row" }, first ? null : h("button", { type: "button", class: "ghost", onclick: () => (applyTheme(profile?.tema ?? "holo"), homeScreen()) }, "Cancelar"), save),
   );
   show(h("section", { class: "screen center" }, form));
   nome.focus();
@@ -409,6 +441,15 @@ const call = {
   news: null as HTMLElement | null,
   stage: null as HTMLElement | null, // selos das cenas (REC, gelo…)
   unmute: null as (() => void) | null,
+  screen: null as HTMLElement | null,
+  /** painel ao lado do rosto: o tabuleiro e/ou as imagens */
+  area: null as HTMLElement | null,
+  game: null as GameView | null,
+  gallery: null as HTMLElement | null,
+  /** falas curtas do Eddy que chegam sem a pessoa falar (comentários do jogo…) */
+  interject: [] as string[],
+  listening: false,
+  setMuted: (_on: boolean) => {},
 };
 let scenes: SceneBundle | null = null;
 
@@ -436,6 +477,9 @@ function resetCall() {
   call.muted = false;
   call.silences = 0;
   call.typed = "";
+  call.interject = [];
+  call.game = null;
+  call.gallery = null;
 }
 
 /** Fala inteira do Eddy (cortada nas marcações), esperando terminar. */
@@ -596,13 +640,27 @@ function inCallScreen() {
   call.timer = window.setInterval(() => call.clock && (call.clock.textContent = mmss(Date.now() - call.started)), 1000);
 
   const muteBtn = h("button", { class: "round", title: "Mudo", html: MIC });
-  muteBtn.addEventListener("click", () => {
-    call.muted = !call.muted;
-    muteBtn.innerHTML = call.muted ? MIC_OFF : MIC;
-    muteBtn.classList.toggle("on", call.muted);
-    if (call.muted) B.cancelHear();
+  call.setMuted = (on: boolean) => {
+    call.muted = on;
+    muteBtn.innerHTML = on ? MIC_OFF : MIC;
+    muteBtn.classList.toggle("on", on);
+    if (on) B.cancelHear();
     else call.unmute?.();
-  });
+  };
+  muteBtn.addEventListener("click", () => call.setMuted(!call.muted));
+
+  const gamesMenu = h(
+    "div",
+    { class: "games-menu" },
+    h("button", { type: "button", onclick: () => (gamesMenu.classList.remove("open"), openGame("chess", true)) }, "♞\uFE0E Xadrez"),
+    h("button", { type: "button", onclick: () => (gamesMenu.classList.remove("open"), openGame("checkers", true)) }, "⛂\uFE0E Damas"),
+  );
+  const gamesBtn = h("button", { class: "round", title: "Jogar com o Eddy", html: KNIGHT, onclick: () => gamesMenu.classList.toggle("open") });
+  const themeBtn = h("button", { class: "round", title: "Trocar o visual do Eddy", html: CONTRAST, onclick: () => {
+    setTheme("toggle");
+    if (!speech.speaking) interject(sceneFallback(scenes, "a_theme"));
+  } });
+  call.area = h("div", { class: "side-area" });
 
   const input = h("input", { placeholder: "Digite e aperte Enter…" }) as HTMLInputElement;
   const typeBox = h("form", { class: "typebox", onsubmit: (ev: Event) => {
@@ -626,33 +684,140 @@ function inCallScreen() {
     if (speech.speaking) speech.stop();
   });
 
-  show(
-    h(
-      "section",
-      { class: "screen incall" },
-      faceEl,
-      h("header", { class: "top" }, h("span", { class: "live" }), h("b", {}, "Eddy"), call.clock),
-      call.stage,
-      h("div", { class: "captions" }, call.you, call.says, call.status),
-      typeBox,
-      h("div", { class: "controls" }, muteBtn, h("button", { class: "hangup", title: "Desligar", html: PHONE, onclick: () => hangUp() }), keysBtn),
-      call.news,
-    ),
+  call.screen = h(
+    "section",
+    { class: "screen incall" },
+    faceEl,
+    h("header", { class: "top" }, h("span", { class: "live" }), h("b", {}, "Eddy"), call.clock),
+    call.area,
+    call.stage,
+    h("div", { class: "captions" }, call.you, call.says, call.status),
+    typeBox,
+    gamesMenu,
+    h("div", { class: "controls" }, gamesBtn, muteBtn, h("button", { class: "hangup", title: "Desligar", html: PHONE, onclick: () => hangUp() }), keysBtn, themeBtn),
+    call.news,
   );
+  show(call.screen);
+}
+
+// ── o que o Eddy faz na tela: jogos, imagens, visual ──────────────────────────
+
+/** O rosto vai para o canto enquanto há tabuleiro ou imagem na tela. */
+function refreshSide() {
+  call.screen?.classList.toggle("side", !!call.area?.childElementCount);
+}
+
+/**
+ * Uma fala curta do Eddy sem a pessoa ter falado (comentário do jogo, fim de
+ * partida). Entra na vez do laço: se ele estiver ouvindo, para de ouvir, fala e
+ * volta — nunca fala por cima do microfone aberto.
+ */
+function interject(line: string) {
+  if (!line || !call.active) return;
+  call.interject.push(line);
+  if (call.listening) B.cancelHear();
+  call.unmute?.(); // acorda o laço parado no mudo; ele volta ao mudo depois de falar
+}
+
+const gameHost: GameHost = {
+  thinking(on) {
+    if (!call.face || speech.speaking) return;
+    call.face.state = on ? "think" : call.listening ? "listen" : "idle";
+  },
+  comment(pool) {
+    if (speech.speaking || call.interject.length) return; // não amontoa falas
+    interject(sceneFallback(scenes, pool));
+  },
+  end(o) {
+    if (call.face) {
+      call.face.expression = o === "won" ? "proud" : o === "lost" ? "angry" : "skeptical";
+      if (o === "lost") call.face.glitch(0.9); // péssimo perdedor
+    }
+    if (o === "won") ringer?.fanfare();
+    const kind = `game_${o}` as SceneKind;
+    const gen = call.gen;
+    void B.sceneLine(kind, profile!)
+      .catch(() => sceneFallback(scenes, kind))
+      .then((line) => gen === call.gen && interject(line));
+  },
+};
+
+function openGame(kind: GameKind, announce: boolean) {
+  if (!call.area) return;
+  call.game?.el.remove();
+  call.game?.close();
+  const g = new GameView(kind, gameHost);
+  call.game = g;
+  g.el.querySelector(".panel-head")!.append(h("button", { type: "button", class: "ghost", title: "Sair do jogo", onclick: () => closeGame(true) }, "×"));
+  call.area.prepend(g.el);
+  refreshSide();
+  // microfone pausado: ninguém fala por cima do lance, e o Scribe não fica aberto à toa
+  call.setMuted(true);
+  setStatus("Sua vez. Microfone pausado no jogo — toque no 🎤 para falar com ele.");
+  if (announce) interject(sceneFallback(scenes, "g_start"));
+}
+
+function closeGame(byUser: boolean) {
+  const g = call.game;
+  if (!g) return;
+  g.close();
+  g.el.remove();
+  call.game = null;
+  refreshSide();
+  if (byUser && g.started) {
+    const gen = call.gen;
+    void B.sceneLine("game_quit", profile!)
+      .catch(() => sceneFallback(scenes, "game_quit"))
+      .then((line) => gen === call.gen && interject(line));
+  }
+}
+
+function closeGallery() {
+  call.gallery?.remove();
+  call.gallery = null;
+  refreshSide();
+}
+
+async function showImages(q: string) {
+  const gen = call.gen;
+  let pics: Pic[] = [];
+  try {
+    pics = await searchImages(q);
+  } catch (e) {
+    if (gen === call.gen) setStatus("Imagens: " + (e as Error).message);
+  }
+  if (gen !== call.gen || !call.area) return;
+  if (!pics.length) return interject(sceneFallback(scenes, "img_none"));
+  closeGallery();
+  call.gallery = galleryPanel(q, pics, closeGallery);
+  call.area.append(call.gallery);
+  refreshSide();
+}
+
+function doAction(a: Action) {
+  if (a.kind === "game") openGame(a.game, false);
+  else if (a.kind === "theme") setTheme(a.to);
+  else if (a.kind === "image" && !a.blocked) void showImages(a.query);
 }
 
 async function loop() {
   while (call.active) {
+    if (call.interject.length) {
+      await say(call.interject.shift()!);
+      if (call.face && call.face.state === "speak") call.face.state = "idle";
+      continue;
+    }
     let text = call.typed;
     call.typed = "";
     if (!text) {
       if (call.muted) {
-        setFace("idle", "Microfone mudo — o Eddy está esperando (e julgando).");
+        setFace("idle", call.game ? "Sua vez. Microfone pausado no jogo — toque no 🎤 para falar." : "Microfone mudo — o Eddy está esperando (e julgando).");
         await new Promise<void>((r) => (call.unmute = r));
         call.unmute = null;
         continue;
       }
       setFace("listen", "Pode falar…");
+      call.listening = true;
       try {
         text = await B.hear({
           lang: lang(),
@@ -660,14 +825,16 @@ async function loop() {
           onLevel: (l) => call.face && (call.face.level = l),
         });
       } catch (e) {
+        call.listening = false;
         setFace("error", "Microfone: " + (e as Error).message);
         await sleep(2000);
         continue;
       }
+      call.listening = false;
       if (!call.active) break;
-      if (call.typed) continue; // digitou enquanto ouvia
+      if (call.typed || call.interject.length) continue; // digitou, ou o Eddy tem algo a dizer
       if (!text) {
-        if (call.muted) continue;
+        if (call.muted || call.game) continue; // no jogo, pensar calado não é silêncio
         call.silences++;
         if (call.silences === 2 || call.silences === 4) {
           const line = await B.silence(profile!, false);
@@ -744,7 +911,7 @@ async function runScene(kind: SceneKind) {
 
 /** Cena "hold": às vezes (depois de umas perguntas) ele põe na espera antes de responder. */
 function shouldHold() {
-  return call.turns >= 3 && !call.heldOnce && Math.random() < 0.13;
+  return call.turns >= 3 && !call.heldOnce && !call.game && Math.random() < 0.13;
 }
 
 async function ask(text: string): Promise<SceneKind | undefined> {
@@ -781,6 +948,7 @@ async function ask(text: string): Promise<SceneKind | undefined> {
     })();
   }
   try {
+    const onAction = (a: Action) => call.gen === minha && doAction(a);
     const out = await B.turn(text, profile!, (tok) => {
       if (call.gen !== minha) return;
       full += tok;
@@ -791,7 +959,7 @@ async function ask(text: string): Promise<SceneKind | undefined> {
         speak(m[1]);
         pending = m[3];
       }
-    });
+    }, { onAction, context: call.game?.context() ?? "" });
     if (call.gen !== minha) return undefined;
     if (pending.trim()) speak(pending);
     await hold;
@@ -823,6 +991,10 @@ function hangUp(o: HangUpOptions = {}) {
   if (!call.active) return;
   call.active = false;
   call.gen++; // o que ainda vier desta chamada é resposta velha
+  call.game?.close();
+  call.game = null;
+  call.gallery = null;
+  call.interject = [];
   speech.stop();
   ringer?.stop();
   ringer?.holdMusic(false);
@@ -873,6 +1045,7 @@ async function afterLogin() {
   show(h("section", { class: "screen center" }, brand(), h("p", { class: "muted" }, "Carregando seu perfil…")));
   await ready;
   profile = await Puter.loadProfile();
+  applyTheme(profile?.tema ?? "holo");
   if (!profile) return profileScreen(true);
   await B.setProfile(profile, undefined, username || undefined);
   homeScreen();

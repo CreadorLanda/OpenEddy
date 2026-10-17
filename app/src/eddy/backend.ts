@@ -20,11 +20,26 @@ export const LINKS = {
 
 export type SceneKind =
   | "bye" | "bye_callback" | "insult" | "insult_callback" | "rival" | "rival_return"
-  | "praise" | "surprise_call" | "surprise_declined" | "hold" | "hold_back";
+  | "praise" | "surprise_call" | "surprise_declined" | "hold" | "hold_back"
+  | "game_won" | "game_lost" | "game_draw" | "game_quit";
+
+/** Algo que o Eddy FAZ na tela (core/actions.py reconhece, a tela executa). */
+export type Action =
+  | { kind: "image"; query: string; blocked?: boolean }
+  | { kind: "theme"; to: "classic" | "holo" | "toggle" }
+  | { kind: "game"; game: "chess" | "checkers" };
+
+export interface TurnOptions {
+  /** Chamado assim que a ação é reconhecida, antes do modelo responder. */
+  onAction?: (a: Action) => void;
+  /** O estado da tela para o modelo (core/actions.context_note). */
+  context?: string;
+}
 
 export interface TurnResult {
   text: string;
   event?: SceneKind;
+  action?: Action;
   news?: NewsItem[];
   settings?: { voice: string };
 }
@@ -49,14 +64,15 @@ export interface Backend {
   hear(o: HearOptions): Promise<string>;
   cancelHear(): void;
   silence(p: Profile, final: boolean): Promise<string>;
-  turn(text: string, p: Profile, onToken: (t: string) => void): Promise<TurnResult>;
+  turn(text: string, p: Profile, onToken: (t: string) => void, o?: TurnOptions): Promise<TurnResult>;
   /** Notas e falas de reserva das cenas, no idioma da pessoa. */
   scenes(p: Profile): Promise<SceneBundle>;
   /** Fala de uma cena sem fala da pessoa (ligar de volta, voltar do gelo…). */
   sceneLine(kind: SceneKind, p: Profile): Promise<string>;
 }
 
-export function sceneFallback(b: SceneBundle | null, kind: SceneKind): string {
+/** Fala de reserva de uma cena, ou de uma das listas curtas (g_took, img_none…). */
+export function sceneFallback(b: SceneBundle | null, kind: SceneKind | string): string {
   const pool = b?.fallback[kind];
   if (Array.isArray(pool) && pool.length) return pool[Math.floor(Math.random() * pool.length)];
   return typeof pool === "string" ? pool : "";
@@ -96,13 +112,14 @@ const desktop: Backend = {
   async sceneLine(kind) {
     return (await Api.scene(kind)).text;
   },
-  async turn(text, _p, onToken) {
+  async turn(text, _p, onToken, o = {}) {
     let out: TurnResult = { text: "" };
     await Api.turn(text, (ev) => {
       if (ev.type === "token") onToken(String(ev.token));
+      else if (ev.type === "action") o.onAction?.(ev.action as Action);
       else if (ev.type === "done") out = ev as unknown as TurnResult;
       else if (ev.type === "error") throw new Error(String(ev.error));
-    });
+    }, o.context);
     return out;
   },
 };
@@ -117,6 +134,12 @@ interface PuterAi {
 }
 
 const puter = () => (window as unknown as { puter: PuterAi }).puter;
+
+/** O mesmo texto de core/actions.context_note, para o modo web. */
+function contextNote(c?: string) {
+  const t = (c ?? "").split(/\s+/).join(" ").trim().slice(0, 300);
+  return t ? `\n\n[CONTEXTO DA TELA — não leia em voz alta: ${t}]` : "";
+}
 
 async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(path, {
@@ -198,15 +221,19 @@ const web: Backend = {
     if (minha === call) seenSilence.push(text); // uma fala de silêncio de outra chamada não conta
     return text;
   },
-  async turn(text, p, onToken) {
+  async turn(text, p, onToken, o = {}) {
     const minha = call;
-    const routed = await post<{ text: string | null; news?: NewsItem[]; event?: SceneKind }>("/api/web/route", { text, profile: p });
+    const routed = await post<{ text: string | null; news?: NewsItem[]; event?: SceneKind; action?: Action; note?: string; fallback?: string }>(
+      "/api/web/route",
+      { text, profile: p },
+    );
+    if (routed.action) o.onAction?.(routed.action);
     let answer: string;
     if (routed.text) {
       answer = routed.text;
       onToken(answer);
     } else {
-      const direction = routed.event ? sceneData?.directions[routed.event] ?? "" : "";
+      const direction = (routed.event ? sceneData?.directions[routed.event] ?? "" : "") + (routed.note ?? "") + contextNote(o.context);
       const messages = [{ role: "system", content: system }, ...history.slice(-12), { role: "user", content: text + direction }];
       let got = false;
       try {
@@ -216,8 +243,8 @@ const web: Backend = {
         try {
           answer = await chat(messages, onToken, false); // modelo indisponível: o padrão do Puter
         } catch (e2) {
-          if (!routed.event) throw e2;
-          answer = sceneFallback(sceneData, routed.event);
+          if (!routed.event && !routed.fallback) throw e2;
+          answer = routed.event ? sceneFallback(sceneData, routed.event) : routed.fallback!;
           onToken(answer);
         }
       }
@@ -226,7 +253,7 @@ const web: Backend = {
       history.push({ role: "user", content: text }, { role: "assistant", content: answer });
       history = history.slice(-24);
     }
-    return { text: answer, news: routed.news, event: routed.event };
+    return { text: answer, news: routed.news, event: routed.event, action: routed.action };
   },
   async scenes() {
     return sceneData ?? { directions: {}, fallback: {} };

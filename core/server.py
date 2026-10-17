@@ -172,12 +172,15 @@ def meta(h, query):
 
 
 def eddy_turn(h):
-    text = str(h._body().get("text", "")).strip()
+    body = h._body()
+    text = str(body.get("text", "")).strip()
     if not text:
         raise ValueError("mensagem vazia")
     h._sse_start()
     try:
-        out = eddy.turn(text, lambda t: h._sse({"type": "token", "token": t}))
+        out = eddy.turn(text, lambda t: h._sse({"type": "token", "token": t}),
+                        on_action=lambda a: h._sse({"type": "action", "action": a}),
+                        context=str(body.get("context", "")))
         if out.get("stale"):
             # A pessoa desligou (ou ligou outra vez) enquanto o Eddy pensava: a
             # resposta é de uma chamada que já não existe. O stream fecha sem

@@ -32,6 +32,7 @@ from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import actions  # noqa: E402
 import assistant  # noqa: E402
 import scenes  # noqa: E402
 import eleven  # noqa: E402
@@ -352,6 +353,11 @@ def r_route(h, user, body):
     event = scenes.detect(text, p["idioma"])
     if event:
         return {"text": None, "event": event}  # o navegador gera a fala com a nota de direção
+    action = actions.detect(text, p["idioma"])
+    if action:
+        # a tela executa (a busca de imagens sai do navegador); o modelo comenta
+        return {"text": None, "action": action, "note": actions.note(action),
+                "fallback": scenes.fallback(assistant.action_fallback(action), p["idioma"])}
     out = assistant.route(text, p)
     return {"text": out[0], **out[1]} if out else {"text": None}
 

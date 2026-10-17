@@ -63,13 +63,32 @@ export function expressionForTag(tag: string): Expression | null {
 
 type RGB = [number, number, number];
 
-const COLORS: Record<FaceState, RGB> = {
-  idle: [110, 228, 255],
-  listen: [120, 240, 230],
-  think: [160, 170, 255],
-  speak: [140, 236, 255],
-  error: [255, 93, 108],
-  offline: [90, 110, 130],
+/**
+ * Visual: "holo" = o holograma azul brilhando no escuro; "classic" = o Eddy da
+ * série, traço preto sobre branco, sem brilho. Vale para todos os rostos da tela.
+ */
+export type FaceTheme = "holo" | "classic";
+let theme: FaceTheme = "holo";
+export const setFaceTheme = (t: FaceTheme) => void (theme = t);
+export const faceTheme = () => theme;
+
+const COLORS: Record<FaceTheme, Record<FaceState, RGB>> = {
+  holo: {
+    idle: [110, 228, 255],
+    listen: [120, 240, 230],
+    think: [160, 170, 255],
+    speak: [140, 236, 255],
+    error: [255, 93, 108],
+    offline: [90, 110, 130],
+  },
+  classic: {
+    idle: [17, 17, 17],
+    listen: [10, 70, 66],
+    think: [40, 44, 120],
+    speak: [17, 17, 17],
+    error: [190, 28, 44],
+    offline: [150, 150, 150],
+  },
 };
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -85,7 +104,7 @@ export class EddyFace {
   expression: Expression = "happy";
 
   private t = 0;
-  private col: RGB = [...COLORS.offline];
+  private col: RGB = [...COLORS[theme].offline];
   // valores animados (aproximam-se do alvo da expressão)
   private lidL = 1;
   private lidR = 1;
@@ -117,7 +136,7 @@ export class EddyFace {
   update(dt: number) {
     this.t += dt;
     const s = this.state;
-    const target = COLORS[s];
+    const target = COLORS[theme][s];
     for (let i = 0; i < 3; i++) this.col[i] = approach(this.col[i], target[i], 6, dt);
 
     const ex = EXPRESSIONS[s === "error" ? "annoyed" : this.expression];
@@ -182,7 +201,8 @@ export class EddyFace {
     const scale = Math.min(W / 420, H / 400);
     const bob = Math.sin(this.t * 1.4) * 3;
     const [r, g, b] = this.col.map(Math.round);
-    const flicker = this.t < this.glitchUntil ? 0.55 : 0.94 + Math.sin(this.t * 31) * 0.03;
+    const classic = theme === "classic";
+    const flicker = this.t < this.glitchUntil ? 0.55 : classic ? 1 : 0.94 + Math.sin(this.t * 31) * 0.03;
     const color = (a: number) => `rgba(${r},${g},${b},${a})`;
 
     ctx.save();
@@ -207,7 +227,7 @@ export class EddyFace {
         ctx.arc(190 + Math.cos(a) * 168, 175 + Math.sin(a) * 158, 5 - i, 0, Math.PI * 2);
         ctx.fillStyle = color(0.8 - i * 0.2);
         ctx.shadowColor = color(1);
-        ctx.shadowBlur = 14;
+        ctx.shadowBlur = classic ? 0 : 14;
         ctx.fill();
       }
       ctx.shadowBlur = 0;
@@ -221,11 +241,13 @@ export class EddyFace {
     }
 
     const glitchX = this.t < this.glitchUntil ? (Math.random() - 0.5) * 10 : 0;
-    const passes: [number, string, number][] = [
-      [1, color(0.35 * flicker), 26], // brilho largo
-      [1, color(0.95 * flicker), 0], // traço
-      [0.32, `rgba(255,255,255,${0.55 * flicker})`, 0], // núcleo claro
-    ];
+    const passes: [number, string, number][] = classic
+      ? [[0.82, color(flicker), 0]] // traço de caneta, sem brilho
+      : [
+          [1, color(0.35 * flicker), 26], // brilho largo
+          [1, color(0.95 * flicker), 0], // traço
+          [0.32, `rgba(255,255,255,${0.55 * flicker})`, 0], // núcleo claro
+        ];
 
     for (const [widthK, style, blur] of passes) {
       ctx.strokeStyle = style;
@@ -341,7 +363,7 @@ export class EddyFace {
   /** Lágrimas escorrendo dos dois olhos (chorando). */
   private tears(ctx: CanvasRenderingContext2D, color: (a: number) => string) {
     ctx.save();
-    ctx.shadowBlur = 10;
+    ctx.shadowBlur = theme === "classic" ? 0 : 10;
     ctx.shadowColor = color(0.9);
     for (const [i, cx] of [148, 232].entries()) {
       const p = (this.t * 0.8 + i * 0.45) % 1;

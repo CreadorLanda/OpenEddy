@@ -12,6 +12,7 @@ import threading
 
 import eleven
 import llm
+import actions
 import memory
 import scenes
 import web
@@ -244,6 +245,13 @@ def route(text: str, p: dict):
     return None
 
 
+def action_fallback(action: dict) -> str:
+    """A fala de reserva (scenes.FALLBACK) de uma ação, se o modelo falhar."""
+    if action.get("blocked"):
+        return "a_blocked"
+    return {"image": "a_image", "theme": "a_theme", "game": "a_game"}[action["kind"]]
+
+
 class Eddy:
     """O Eddy do app no PC: um usuário, conversa guardada aqui, cérebro no Ollama.
 
@@ -383,7 +391,7 @@ class Eddy:
 
         return publicar
 
-    def turn(self, text, on_token):
+    def turn(self, text, on_token, on_action=None, context=""):
         """Uma fala da pessoa na ligação. Devolve {text, ...extras}.
 
         O turno pertence à chamada em que foi pedido — não à que estiver valendo
@@ -400,14 +408,18 @@ class Eddy:
             if self.call != call:
                 return {"text": "", "stale": True}  # trocou-se de chamada enquanto esperava
             event = scenes.detect(text, self.lang)
-            routed = None if event else self._route(text)
+            action = None if event else actions.detect(text, self.lang)
+            if action and on_action:
+                on_action(action)  # a tela já começa (busca a imagem, abre o tabuleiro…)
+            routed = None if event or action else self._route(text)
             if routed:
                 answer, extra = routed
                 publicar(answer)
             else:
                 # O que a pessoa mandou guardar entra no prompt de sistema como
                 # dado, nunca como conversa: a memória não mistura-se no history.
-                content = text + (scenes.note(event) if event else "")
+                content = (text + (scenes.note(event) if event else "")
+                           + (actions.note(action) if action else "") + actions.context_note(context))
                 messages = ([{"role": "system",
                               "content": system_prompt(self.profile, self.memoria(text))}]
                             + self.history[-12:] + [{"role": "user", "content": content}])
@@ -416,11 +428,11 @@ class Eddy:
                                       should_stop=lambda: self.call != call)["content"]
                     answer = re.sub(r"(?s)<think>.*?</think>", "", answer).strip()
                 except Exception:
-                    if not event:
+                    if not event and not action:
                         raise
-                    answer = scenes.fallback(event, self.lang)
+                    answer = scenes.fallback(event or action_fallback(action), self.lang)
                     publicar(answer)
-                extra = {"event": event} if event else {}
+                extra = {"event": event} if event else {"action": action} if action else {}
             with self.publish:
                 if self.call != call:
                     return {"text": "", "stale": True}

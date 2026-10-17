@@ -95,7 +95,8 @@ export const Api = {
   callSilence: (final = false) => call<{ text: string }>("POST", "/api/eddy/call/silence", { final }),
   listenCancel: () => call("POST", "/api/eddy/listen/cancel"),
   listen: (maxSeconds = 15) => call<{ text: string }>("POST", "/api/eddy/listen", { max_seconds: maxSeconds }),
-  turn: (text: string, onEvent: (ev: Record<string, unknown>) => void) => stream("/api/eddy/turn", { text }, onEvent),
+  /** `context` = o que está na tela (um jogo em andamento…), para o modelo saber. */
+  turn: (text: string, onEvent: (ev: Record<string, unknown>) => void, context = "") => stream("/api/eddy/turn", { text, context }, onEvent),
   news: () => call<{ items: NewsItem[] }>("GET", "/api/news"),
   /** Fala em streaming: devolve a resposta crua (PCM da ElevenLabs ou WAV do Kokoro). */
   async ttsStream(text: string, voice?: string, signal?: AbortSignal): Promise<Response> {
