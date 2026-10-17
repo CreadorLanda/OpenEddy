@@ -81,8 +81,10 @@ function preload(src: string, ms = 10000): Promise<boolean> {
 
 export interface Gallery {
   el: HTMLElement;
-  /** Mostra as imagens quando a primeira já carregou; false se nenhuma abriu. */
-  show(pics: Pic[]): Promise<boolean>;
+  /** Carrega a primeira imagem que abrir (o painel continua procurando); false se nenhuma abriu. */
+  prepare(pics: Pic[]): Promise<boolean>;
+  /** Troca a busca pela imagem já carregada. */
+  reveal(): void;
   /** Não achou nada (ou deu erro): troca a busca pelo aviso. */
   empty(why?: string): void;
 }
@@ -134,20 +136,23 @@ export function galleryPanel(q: string, onClose: () => void): Gallery {
   );
   return {
     el,
-    async show(found) {
+    async prepare(found) {
       // a primeira que abrir de verdade vai na frente
       for (let k = 0; k < Math.min(found.length, 4); k++) {
         if (await preload(found[k].thumb)) {
           pics = found.slice(k);
           i = 0;
-          paint();
-          pic.replaceChildren(img);
-          el.classList.remove("loading");
-          prev.hidden = next.hidden = pics.length < 2;
           return true;
         }
       }
       return false;
+    },
+    reveal() {
+      if (!pics.length) return;
+      paint();
+      pic.replaceChildren(img);
+      el.classList.remove("loading");
+      prev.hidden = next.hidden = pics.length < 2;
     },
     empty(why = "Nada encontrado.") {
       el.classList.remove("loading");

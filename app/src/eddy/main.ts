@@ -449,6 +449,8 @@ const call = {
   /** falas curtas do Eddy que chegam sem a pessoa falar (comentários do jogo…) */
   interject: [] as string[],
   listening: false,
+  /** o Eddy está respondendo uma fala (pensando ou falando a resposta) */
+  asking: false,
   setMuted: (_on: boolean) => {},
 };
 let scenes: SceneBundle | null = null;
@@ -795,11 +797,17 @@ async function showImages(q: string) {
     why = (e as Error).message;
   }
   if (gen !== call.gen || call.gallery !== g.el) return; // desligou ou fechou o painel
-  if (pics.length && (await g.show(pics))) {
-    if (gen === call.gen && call.gallery === g.el) interject(sceneFallback(scenes, "img_found"));
+  const found = pics.length > 0 && (await g.prepare(pics));
+  // a cena: ele termina o "procurando…", faz uma pausa de suspense, e só então
+  // a imagem aparece (já carregada) e ele se gaba — ou admite que não achou
+  while (gen === call.gen && (call.asking || speech.speaking)) await sleep(150);
+  await sleep(1300);
+  if (gen !== call.gen || call.gallery !== g.el) return;
+  if (found) {
+    g.reveal();
+    interject(sceneFallback(scenes, "img_found"));
     return;
   }
-  if (gen !== call.gen || call.gallery !== g.el) return;
   g.empty(why ? `Não deu: ${why}.` : "Nada encontrado.");
   interject(sceneFallback(scenes, "img_none"));
   window.setTimeout(() => call.gallery === g.el && closeGallery(), 4000);
@@ -926,6 +934,15 @@ function shouldHold() {
 }
 
 async function ask(text: string): Promise<SceneKind | undefined> {
+  call.asking = true;
+  try {
+    return await askInner(text);
+  } finally {
+    call.asking = false;
+  }
+}
+
+async function askInner(text: string): Promise<SceneKind | undefined> {
   call.turns++;
   call.you!.textContent = text;
   call.says!.textContent = "";
